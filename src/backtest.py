@@ -30,7 +30,6 @@ class BacktestResult:
     returns: float
     hit_rate: float
 
-
 def get_daily_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     df = yf.download(symbol, start=start, end=end, progress=False, group_by='column', auto_adjust=False)
     if df is None or df.empty:
@@ -190,11 +189,9 @@ def print_backtest(results: Dict[str, BacktestResult]):
         print(f"total: trades:{total_trades} wins:{total_wins}  total_return:{total_returns:.2%}")
         print(f"total: trades:{total_trades} wins:{total_wins}  total_return:{total_returns:.2%}", file=f)
 
-
-
     f.close()
 
-def main():
+if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Backtest two-month-high + volume spike strategy.")
@@ -221,6 +218,3 @@ def main():
     else:
         parser.error("Please provide --symbol or --from-csv")
 
-
-if __name__ == "__main__":
-    main()

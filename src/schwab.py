@@ -77,6 +77,10 @@ class SchwabClient:
         start_dt = end_dt - timedelta(days=2)  # Last 1 year
         return SchwabClient._client.account_orders(SchwabClient._account_hash, start_dt, end_dt, None, status)  # Return all orders
 
+    @staticmethod
+    def get_quote(symbol: str) -> List[Dict]:
+        """Get quotes for the specified symbols."""
+        return SchwabClient._client.quote(symbol_id=symbol).json()
 
     def order_details(self):
         """Get details of the last order placed."""

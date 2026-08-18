@@ -13,21 +13,30 @@ import re
 import data
 from schwab import SchwabClient
 from ticker_scanner import collect_all_exchange_tickers
+from technical_analyze import TechnicalAnalyzer
 
 
 class TradingAgent:
+
     def __init__(self):
         pass
 
     def background_task(self, stop_event):
+        ta = TechnicalAnalyzer()
+
         while not stop_event.is_set():
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
-            time.sleep(3)
+            time.sleep(300)
+            ta.show_doji()
+
         print("[Background Thread] Stopped.")
    
     def run(self):
         print("Trading agent started")
+
+        ## first collect stock info and save in class
+
         '''
         if not os.path.isfile('scan_results.csv'):
             print("No existing scan results found. Running new scan.")
@@ -96,33 +105,6 @@ class TradingAgent:
         except KeyboardInterrupt:
             print("Update ticker csv stopped by user.")
 
-
-    # ------------------------------------------------------------------
-    # account helpers
-    # ------------------------------------------------------------------
-    @staticmethod
-    def get_fidelity_holdings() -> Dict[str, Any]:
-        """Fetch stocks and options held in the Fidelity account."""
-        return {
-            "stocks": fidelity_stocks(),
-            "options": fidelity_options(),
-        }
-
-    @staticmethod
-    def get_schwab_holdings() -> Dict[str, Any]:
-        """Fetch stocks and options held in the Schwab account."""
-        return {
-            "stocks": schwab_stocks(),
-            "options": schwab_options(),
-        }
-
-    @classmethod
-    def get_all_holdings(cls) -> Dict[str, Any]:
-        """Aggregate holdings from both Fidelity and Schwab."""
-        return {
-            "fidelity": cls.get_fidelity_holdings(),
-            "schwab": cls.get_schwab_holdings(),
-        }
     
     @classmethod
     def interpret_trade_command(cls, command: str) -> dict:
@@ -143,8 +125,6 @@ class TradingAgent:
         # Pattern for OCO order: "oco 100 soxl at 148 and 142"
         oco_pattern = r"(?P<action>oco)\s+(?P<quantity>\d+)\s+(?P<symbol>[a-z0-9\.]+?)\s+at\s+(?P<price>\d+(\.\d+)?)\s+and\s+(?P<stop_price>\d+(\.\d+)?)"   
 
-
-        
         match = re.match(pattern, clean_command)
         if not match:
             match = re.match(oco_pattern, clean_command)
