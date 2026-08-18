@@ -138,21 +138,27 @@ class TradingAgent:
         # \s+(?P<quantity>\d+)          -> Matches one or more digits for share size
         # \s+(?P<symbol>[a-z0-9\.]+?)   -> Matches the ticker symbol (e.g., soxl, aapl, brk.b)
         # (\s+at\s+(?P<price>\d+(\.\d+)?))? -> Optional lookahead for "at X.XX" limit price
-        pattern = r"(?P<action>buy|sell)\s+(?P<quantity>\d+)\s+(?P<symbol>[a-z0-9\.]+?)(\s+at\s+(?P<price>\d+(\.\d+)?))?$"
+        pattern = r"(?P<action>buy|sell|stop)\s+(?P<quantity>\d+)\s+(?P<symbol>[a-z0-9\.]+?)(\s+at\s+(?P<price>\d+(\.\d+)?))?$"
+
+        # Pattern for OCO order: "oco 100 soxl at 148 and 142"
+        oco_pattern = r"(?P<action>oco)\s+(?P<quantity>\d+)\s+(?P<symbol>[a-z0-9\.]+?)\s+at\s+(?P<price>\d+(\.\d+)?)\s+and\s+(?P<stop_price>\d+(\.\d+)?)"   
+
+
         
         match = re.match(pattern, clean_command)
         if not match:
-            print(f"Could not interpret phrase: '{command}'. Please use format 'buy [qty] [symbol] at [price]'.")
+            match = re.match(oco_pattern, clean_command)
+        if not match:
+            print(f"Could not interpret phrase: '{command}'. Please use format 'buy [qty] [symbol] at [price]' or 'oco [qty] [symbol] at [price] and [stop_price]'.")
             return None
 
         data = match.groupdict()
-
-        if data["action"] != "buy":
-            print(f"Only 'buy' actions are currently supported. You entered: '{data['action']}'.")
-            return None
         
         client = SchwabClient()
-        client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="BUY", price=float(data['price']))
+        if data["action"] == "oco":
+            client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
+        elif data["action"] == "stop" or data["action"] == "sell" or data["action"] == "buy":
+            client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action=data["action"], price=float(data['price']))
         return None                 
 
 

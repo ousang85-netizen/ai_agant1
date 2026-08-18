@@ -88,7 +88,7 @@ class SchwabClient:
             temp = self._client.order_details(self._account_hash, order_id)
             print(temp.json())
         
-    def place_order(self, symbol: str, quantity: int,  action: str = "BUY", price: float = None):
+    def place_order(self, symbol: str, quantity: int,  action: str = "BUY", price: float = None, stop_price: float = None):
         """Compose an order for a specific Schwab account."""
 
         """Limit the total money spend on this order to 10000"""
@@ -96,65 +96,150 @@ class SchwabClient:
             print(f"Order exceeds $10000 limit: {price * quantity}")
             return None
 
-         
-        sell_limit = "{:.2f}".format(price * 1.05)  # Set sell limit to 5% above the buy price;
-        stop_limit = "{:.2f}".format(price * 0.98);  # Set stop limit to 2% below the buy price;
-        order = {
-            "orderType": "LIMIT",
-            "session": "NORMAL",
-            "duration": "DAY",
-            "orderStrategyType": "TRIGGER",
-            "price": str(price),
-            "orderLegCollection": [
-                {"instruction": action,
-                "quantity": str(quantity),
-                "instrument": {"symbol": symbol,
-                                "assetType": "EQUITY",
-                                }
-                }
-            ],
-            "childOrderStrategies": [
-            {
-                    "orderStrategyType": "OCO",
-                    "childOrderStrategies": [
-                        {
-                            "orderStrategyType": "SINGLE",
-                            "session": "NORMAL",
-                            "duration": "GOOD_TILL_CANCEL",
-                            "orderType": "LIMIT",
-                            "price": str(sell_limit),
-                            "orderLegCollection": [
-                                {
-                                    "instruction": "SELL",
-                                    "quantity": str(quantity),
-                                    "instrument": {
-                                        "assetType": "EQUITY",
-                                        "symbol": symbol,
-                                    },
-                                }
-                            ],
+        if action == "buy":
+            sell_limit = "{:.2f}".format(price * 1.05)  # Set sell limit to 5% above the buy price;
+            stop_limit = "{:.2f}".format(price * 0.98);  # Set stop limit to 2% below the buy price;
+            buy_order = {
+                "orderType": "LIMIT",
+                "session": "NORMAL",
+                "duration": "DAY",
+                "orderStrategyType": "TRIGGER",
+                "price": str(price),
+                "orderLegCollection": [
+                    {"instruction": 'BUY',
+                    "quantity": str(quantity),
+                    "instrument": {"symbol": symbol,
+                                    "assetType": "EQUITY",
+                                    }
+                    }
+                ],
+                "childOrderStrategies": [
+                {
+                        "orderStrategyType": "OCO",
+                        "childOrderStrategies": [
+                            {
+                                "orderStrategyType": "SINGLE",
+                                "session": "NORMAL",
+                                "duration": "GOOD_TILL_CANCEL",
+                                "orderType": "LIMIT",
+                                "price": str(sell_limit),
+                                "orderLegCollection": [
+                                    {
+                                        "instruction": "SELL",
+                                        "quantity": str(quantity),
+                                        "instrument": {
+                                            "assetType": "EQUITY",
+                                            "symbol": symbol,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "orderStrategyType": "SINGLE",
+                                "session": "NORMAL",
+                                "duration": "GOOD_TILL_CANCEL",
+                                "orderType": "STOP",
+                                "stopPrice": str(stop_limit),
+                                "orderLegCollection": [
+                                    {
+                                        "instruction": "SELL",
+                                        "quantity":  str(quantity),
+                                        "instrument": {
+                                            "assetType": "EQUITY",
+                                            "symbol": symbol,
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+            order = buy_order
+        elif action == "sell":
+            sell_order = {
+                "orderType": "LIMIT",
+                "session": "NORMAL",
+                "duration": "DAY",
+                "orderStrategyType": "SINGLE",
+                "price": str(price),
+                "orderLegCollection": [
+                    {
+                        "instruction": "SELL",
+                        "quantity": str(quantity),
+                        "instrument": {
+                            "symbol": symbol,
+                            "assetType": "EQUITY",
                         },
-                        {
-                            "orderStrategyType": "SINGLE",
-                            "session": "NORMAL",
-                            "duration": "GOOD_TILL_CANCEL",
-                            "orderType": "STOP",
-                            "stopPrice": str(stop_limit),
-                            "orderLegCollection": [
-                                {
-                                    "instruction": "SELL",
-                                    "quantity":  str(quantity),
-                                    "instrument": {
-                                        "assetType": "EQUITY",
-                                        "symbol": symbol,
-                                    },
-                                }
-                            ],
+                    }
+                ],
+            }
+            order = sell_order
+        elif action == "stop":
+            stop_order = {
+                "orderType": "STOP_LIMIT",
+                "session": "NORMAL",
+                "duration": "DAY",
+                "orderStrategyType": "SINGLE",
+                "price": str(price*.99),
+                "stopPrice": str(price),
+                "orderLegCollection": [
+                    {
+                        "instruction": "SELL",
+                        "quantity": str(quantity),
+                        "instrument": {
+                            "symbol": symbol,
+                            "assetType": "EQUITY",
                         },
-                    ],
-                }
-            ],
-        }
+                    }
+                ],
+            }
+            order = stop_order  
+        elif action == "oco":
+            oco_order = {
+                "orderStrategyType": "OCO",
+                "childOrderStrategies": [
+                    {
+                        "orderStrategyType": "SINGLE",
+                        "session": "NORMAL",
+                        "duration": "GOOD_TILL_CANCEL",
+                        "orderType": "LIMIT",
+                        "price": str(price),
+                        "orderLegCollection": [
+                            {
+                                "instruction": "SELL",
+                                "quantity": str(quantity),
+                                "instrument": {
+                                    "assetType": "EQUITY",
+                                    "symbol": symbol,
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "orderStrategyType": "SINGLE",
+                        "session": "NORMAL",
+                        "duration": "GOOD_TILL_CANCEL",
+                        "orderType": "STOP",
+                        "stopPrice": str(stop_price),
+                        "orderLegCollection": [
+                            {
+                                "instruction": "SELL",
+                                "quantity":  str(quantity),
+                                "instrument": {
+                                    "assetType": "EQUITY",
+                                    "symbol": symbol,
+                                },
+                            }
+                        ],
+                    },
+                ],
+            }
+            order = oco_order
+        else:
+            print(f"Invalid action: {action}. Must be 'buy', 'sell', 'stop', or 'oco'.")
+            return None 
+
 
         response = self._client.place_order(self._account_hash, order)  # Return the order response
         if response.status_code >= 200 and response.status_code < 300:
