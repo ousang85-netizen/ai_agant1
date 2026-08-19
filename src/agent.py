@@ -27,9 +27,11 @@ class TradingAgent:
         while not stop_event.is_set():
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
-            time.sleep(300)
+            time.sleep(3)
             ## doji
             ta.show_doji()
+            ## Vix
+            ta.vix_elevated()
             ## check moving average
             ## check if I should sell for profit
             ## check if I should sell for stop loss

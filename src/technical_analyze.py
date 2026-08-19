@@ -7,7 +7,7 @@ from schwab import SchwabClient
 
 class TechnicalAnalyzer:
 
-    stock_list = ["spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
+    stock_list = ['lrcx', "^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
                   "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", 
                   "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be"]    
     stock_info = {}
@@ -84,12 +84,19 @@ class TechnicalAnalyzer:
         doji_list = []
         for symbol in self.stock_list:
             data = self._schwab_client.get_quote(symbol)
-            upper_symbol = symbol.upper()
+
+            if symbol == '^VIX':
+                upper_symbol = '$VIX'
+            else:
+                upper_symbol = symbol.upper()
+
             high = data[upper_symbol]['quote']['highPrice']
             low = data[upper_symbol]['quote']['lowPrice']
             open_price = data[upper_symbol]['quote']['openPrice']
-            close = data[upper_symbol]['quote']['mark']
+            close = data[upper_symbol]['quote']['lastPrice']
 
+            if open_price < 0.1:
+                continue
             data = self.stock_info.get(symbol, {}).get("history")
             max_of_last_5 = data["High"].iloc[-5:-1].max()
             min_of_last_5 = data["Low"].iloc[-5:-1].min()
@@ -104,6 +111,14 @@ class TechnicalAnalyzer:
         print(f"Doji: {doji_list}")
         return None
 
+    def vix_elevated(self):
+            quote = self._schwab_client.get_quote("$VIX")
+            high = quote["$VIX"]['quote']['lastPrice']
+            data = self.stock_info.get("^VIX", {}).get("history")
+            if high-1 > data['High'].iloc[-2]['^VIX']:
+                print(f"!!! VIX is elevated {data['High'].iloc[-1]}!!!")
+            return None
+         
     def plot_data(self):
         """Plot the stock's closing price and EMAs."""
 

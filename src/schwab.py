@@ -80,6 +80,9 @@ class SchwabClient:
     @staticmethod
     def get_quote(symbol: str) -> List[Dict]:
         """Get quotes for the specified symbols."""
+        if symbol == '^VIX':
+            return SchwabClient._client.quote(symbol_id='$VIX').json()
+
         return SchwabClient._client.quote(symbol_id=symbol).json()
 
     def order_details(self):
