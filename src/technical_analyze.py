@@ -7,9 +7,9 @@ from schwab import SchwabClient
 
 class TechnicalAnalyzer:
 
-    stock_list = ["smh", "qqq", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
+    stock_list = ["spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
                   "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", 
-                  "sndk", "tsla", "nvda", "amd", "mrvl", "msft", "intc"]    
+                  "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be"]    
     stock_info = {}
     start_date = "2025-08-18"
     end_date = "2026-08-18"
@@ -89,18 +89,17 @@ class TechnicalAnalyzer:
             low = data[upper_symbol]['quote']['lowPrice']
             open_price = data[upper_symbol]['quote']['openPrice']
             close = data[upper_symbol]['quote']['mark']
-            
+
+            data = self.stock_info.get(symbol, {}).get("history")
+            max_of_last_5 = data["High"].iloc[-5:-1].max()
+            min_of_last_5 = data["Low"].iloc[-5:-1].min()
 
             daily_range = (high - low) / open_price
             open_close_diff = abs(close - open_price) / open_price
 
-            # Check if the swing is large and the close is near the open
-            #is_strong_swing = daily_range >= swing_threshold
-            #is_closed_near_open = open_close_diff <= close_threshold
-
-            #return is_strong_swing and is_closed_near_open   
             if open_close_diff * 6 < daily_range:
-                doji_list.append(symbol)
+                if max_of_last_5.iloc[0] < high or min_of_last_5.iloc[0] > low:
+                    doji_list.append(symbol)
 
         print(f"Doji: {doji_list}")
         return None

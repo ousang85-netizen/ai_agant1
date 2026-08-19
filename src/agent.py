@@ -28,7 +28,11 @@ class TradingAgent:
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
             time.sleep(300)
+            ## doji
             ta.show_doji()
+            ## check moving average
+            ## check if I should sell for profit
+            ## check if I should sell for stop loss
 
         print("[Background Thread] Stopped.")
    
