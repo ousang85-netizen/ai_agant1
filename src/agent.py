@@ -33,6 +33,7 @@ class TradingAgent:
             ## Vix
             ta.vix_elevated()
             ## check moving average
+            ta.check_with_ema()
             ## check if I should sell for profit
             ## check if I should sell for stop loss
 

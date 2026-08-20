@@ -7,9 +7,10 @@ from schwab import SchwabClient
 
 class TechnicalAnalyzer:
 
-    stock_list = ['lrcx', "^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
+    stock_list = ["^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
                   "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", 
-                  "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be"]    
+                  "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be", "pfe",
+                  "xlv", "xlre", "xle", "xlp", "xlu"]    
     stock_info = {}
     start_date = "2025-08-18"
     end_date = "2026-08-18"
@@ -51,13 +52,23 @@ class TechnicalAnalyzer:
             raise ValueError(
                 f"No data found for {symbol}. Check ticker symbol or date range."
             )
+
+        ## calculate ATR
+        high_low = data["High"] - data["Low"]
+        high_close = abs(data["High"] - data["Close"].shift())
+        low_close = abs(data["Low"] - data["Close"].shift())
+
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+
         new_ele = {
             "history": data,
+            "ema10": data["Close"].ewm(span=10, adjust=False).mean(),
             "ema20": data["Close"].ewm(span=20, adjust=False).mean(),
             "ema50": data["Close"].ewm(span=50, adjust=False).mean(),
             "ema100": data["Close"].ewm(span=100, adjust=False).mean(),
             "ema150": data["Close"].ewm(span=150, adjust=False).mean(),
             "ema200": data["Close"].ewm(span=200, adjust=False).mean(),
+            "atr":  true_range.rolling(window=14).mean(),
         }
         self.stock_info[symbol] = new_ele
 
@@ -80,7 +91,8 @@ class TechnicalAnalyzer:
         minutes =  self.market_open_minute()
         if minutes is None or minutes < 330:
             #eturn False  # Only check during the first 15 minutes of market open
-            print(f"Market open minute: {minutes}")
+            #print(f"Market open minute: {minutes}")
+            return None
         doji_list = []
         for symbol in self.stock_list:
             data = self._schwab_client.get_quote(symbol)
@@ -115,10 +127,50 @@ class TechnicalAnalyzer:
             quote = self._schwab_client.get_quote("$VIX")
             high = quote["$VIX"]['quote']['lastPrice']
             data = self.stock_info.get("^VIX", {}).get("history")
-            if high-1 > data['High'].iloc[-2]['^VIX']:
-                print(f"!!! VIX is elevated {data['High'].iloc[-1]}!!!")
+            if high-0.7 > data['Close'].iloc[-2]['^VIX']:
+                print(f"!!! VIX is elevated {data['Close'].iloc[-2]['^VIX']}!!!")
             return None
-         
+    def check_with_ema(self):
+            
+        for symbol in self.stock_list:
+            if symbol.startswith("^"):
+                continue
+            quote = self._schwab_client.get_quote(symbol)
+            atr = self.stock_info.get(symbol, {}).get("atr").iloc[-1]
+            ema10_val = self.stock_info.get(symbol, {}).get("ema10").iloc[-1][symbol.upper()]
+            ema20_val = self.stock_info.get(symbol, {}).get("ema20").iloc[-1][symbol.upper()]
+            ema50_val = self.stock_info.get(symbol, {}).get("ema50").iloc[-1][symbol.upper()]
+            ema100_val = self.stock_info.get(symbol, {}).get("ema100").iloc[-1][symbol.upper()]
+            ema150_val = self.stock_info.get(symbol, {}).get("ema150").iloc[-1][symbol.upper()]
+            ema200_val = self.stock_info.get(symbol, {}).get("ema200").iloc[-1][symbol.upper()]
+            emas = {
+                "ema10": ema10_val,
+                "ema20": ema20_val,
+                "ema50": ema50_val,
+                "ema100": ema100_val,
+                "ema150": ema150_val,
+                "ema200": ema200_val,
+            }
+  
+            cur = quote[symbol.upper()]['quote']['lastPrice']
+            init_val = 1000000.0 # a number higher enough to beyond all stock price
+            text = ""
+            for key, value in emas.items():
+                if value > init_val:
+                    init_val = -1.0 # not in order, so not a perfect uptrend
+                else:
+                    init_val = value
+                if abs(cur - value)/atr < 0.2:
+                    text += f"{symbol}({cur:.2f}) is at {key}({value:.2f}) "
+            if init_val > 0.0:
+                text += f" {symbol} is in perfect uptrend"
+
+            if text != "":
+                text += f" ATR={atr}"
+                print(text)
+        print("\n\n")
+        return None
+
     def plot_data(self):
         """Plot the stock's closing price and EMAs."""
 
