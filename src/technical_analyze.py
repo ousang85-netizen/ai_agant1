@@ -4,19 +4,64 @@ import yfinance as yf
 from datetime import date, datetime, timedelta
 
 from schwab import SchwabClient
+from data import get_data
+
 
 class TechnicalAnalyzer:
 
     stock_list = ["^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
                   "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", 
-                  "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be", "pfe",
+                  "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
+                  "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx",
+                  "afrm", "akam", "alab", "crcl", "crsp", "fsly", "gdx", "ionq", "stx", "ttmi", "avav", "cohr","p",
                   "xlv", "xlre", "xle", "xlp", "xlu"]    
     stock_info = {}
-    start_date = "2025-08-18"
-    end_date = "2026-08-18"
     #end_date = datetime.now()
     _schwab_client = None  # Placeholder for SchwabClient instance
     _initialized = False
+
+    def check_rising_price(self, history: pd.DataFrame, lookback: int = 10) -> dict:
+        """Find the previous low and report the price recovery from that point."""
+        if lookback < 1:
+            raise ValueError("lookback must be at least 1")
+        if "Close" not in history:
+            raise ValueError("history must contain a 'Close' column")
+        if len(history) <= lookback:
+            raise ValueError("history does not contain enough price data")
+
+        close_prices = history["Close"]
+        if isinstance(close_prices, pd.DataFrame):
+            if close_prices.shape[1] != 1:
+                raise ValueError("history must contain one 'Close' price series")
+            close_prices = close_prices.iloc[:, 0]
+        current_price = float(pd.to_numeric(close_prices.iloc[-1]))
+        low_column = "Low" if "Low" in history else "Close"
+        previous_prices = history[low_column]
+        if isinstance(previous_prices, pd.DataFrame):
+            if previous_prices.shape[1] != 1:
+                raise ValueError("history must contain one price series")
+            previous_prices = previous_prices.iloc[:, 0]
+        previous_prices = pd.to_numeric(
+            previous_prices.iloc[-lookback - 1:-1], errors="coerce"
+        ).dropna()
+        if previous_prices.empty:
+            raise ValueError("history does not contain valid previous prices")
+
+        low_position = previous_prices.idxmin()
+        start_price = float(previous_prices.loc[low_position])
+        if start_price <= 0:
+            raise ValueError("previous lowest price must be greater than zero")
+
+        price_change = current_price - start_price
+        percent_change = price_change / start_price * 100
+        return {
+            "is_rising": price_change > 0,
+            "low_date": low_position,
+            "low_price": start_price,
+            "current_price": current_price,
+            "price_change": price_change,
+            "percent_change": percent_change,
+        }
 
     def __init__(self):
         """Downloads historical stock data and calculates specified EMAs."""
@@ -26,11 +71,8 @@ class TechnicalAnalyzer:
             print ("TechnicalAnalyzer already initialized")
             return None
         
-        self.end_date = datetime.now()
-        self.start_date = self.end_date - timedelta(days=365)  # Last 1 year
-
         for ticker in self.stock_list:
-            self.fetch_data(ticker, self.start_date, self.end_date)
+            self.fetch_data(ticker, '1y', '1d')
 
         '''
         # Calculate EMAs using pandas ewm (Exponential Weighted Moving) method
@@ -44,10 +86,10 @@ class TechnicalAnalyzer:
         TechnicalAnalyzer._initialized = True
         return None
 
-    def fetch_data(self, symbol,  start_date=None, end_date=None):
+    def fetch_data(self, symbol,  data_period: str = "1y", interval: str = "1d"):
         """Fetch historical stock data from Yahoo Finance."""
         print(f"Fetching data for {symbol}...")
-        data = yf.download(symbol, start=start_date, end=end_date)
+        data = get_data(symbol, period=data_period, interval=interval)
         if data.empty:
             raise ValueError(
                 f"No data found for {symbol}. Check ticker symbol or date range."
@@ -62,6 +104,7 @@ class TechnicalAnalyzer:
 
         new_ele = {
             "history": data,
+            "ema5": data["Close"].ewm(span=5, adjust=False).mean(),
             "ema10": data["Close"].ewm(span=10, adjust=False).mean(),
             "ema20": data["Close"].ewm(span=20, adjust=False).mean(),
             "ema50": data["Close"].ewm(span=50, adjust=False).mean(),
@@ -76,7 +119,7 @@ class TechnicalAnalyzer:
         """Check if the current time is within the first 15 minutes of market open."""
         now = datetime.now()
         if now.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
-            return None
+            return -1
         market_open_time = now.replace(hour=6, minute=30, second=0, microsecond=0)
         time_diff = now - market_open_time
         return time_diff.total_seconds() // 60  # Return minutes since market open
@@ -113,10 +156,10 @@ class TechnicalAnalyzer:
             max_of_last_5 = data["High"].iloc[-5:-1].max()
             min_of_last_5 = data["Low"].iloc[-5:-1].min()
 
-            daily_range = (high - low) / open_price
-            open_close_diff = abs(close - open_price) / open_price
+            daily_range = high - low
+            open_close_diff = abs(close - open_price)
 
-            if open_close_diff * 6 < daily_range:
+            if open_close_diff * 10 < daily_range:
                 if max_of_last_5.iloc[0] < high or min_of_last_5.iloc[0] > low:
                     doji_list.append(symbol)
 
@@ -131,7 +174,10 @@ class TechnicalAnalyzer:
                 print(f"!!! VIX is elevated {data['Close'].iloc[-2]['^VIX']}!!!")
             return None
     def check_with_ema(self):
-            
+        at_ema = { "ema10":[], "ema20":[], "ema50":[], "ema100":[], "ema150":[], "ema200":[]}
+        perfect_up_trend = []
+        ema10_down = []
+                                                        
         for symbol in self.stock_list:
             if symbol.startswith("^"):
                 continue
@@ -152,22 +198,40 @@ class TechnicalAnalyzer:
                 "ema200": ema200_val,
             }
   
-            cur = quote[symbol.upper()]['quote']['lastPrice']
-            init_val = 1000000.0 # a number higher enough to beyond all stock price
+            cur = quote[symbol.upper()]['quote']['lastPrice']  # need verify at market time
+            #cur_low = quote[symbol.upper()]['quote']['lowPrice']
+            prev_val = 1000000.0 # a number higher enough to beyond all stock price
             text = ""
             for key, value in emas.items():
-                if value > init_val:
-                    init_val = -1.0 # not in order, so not a perfect uptrend
+                if value > prev_val:
+                    prev_val = -1.0 # not in order, so not a perfect uptrend
                 else:
-                    init_val = value
+                    prev_val = value
                 if abs(cur - value)/atr < 0.2:
-                    text += f"{symbol}({cur:.2f}) is at {key}({value:.2f}) "
-            if init_val > 0.0:
-                text += f" {symbol} is in perfect uptrend"
+                    #at_ema[key].append(f"{symbol}({cur:.2f},{value:.2f},{atr:.2f})")
+                    #at_ema[key].append(f"{symbol},atr={atr:.2f}")
+                    text = key
+            if prev_val > 0.0:
+                #text += f"{symbol} is in perfect uptrend"
+                perfect_up_trend.append(symbol)
+            ema10_val1 = self.stock_info.get(symbol, {}).get("ema10").iloc[-1][symbol.upper()] 
+            ema10_val2 = self.stock_info.get(symbol, {}).get("ema10").iloc[-2][symbol.upper()] 
+            ema10_val3 = self.stock_info.get(symbol, {}).get("ema10").iloc[-3][symbol.upper()] 
+            
+            if ema10_val1 < ema10_val2 and ema10_val2 < ema10_val3:
+                ema10_down.append(symbol)
 
-            if text != "":
-                text += f" ATR={atr}"
-                print(text)
+            if text:
+                at_ema[text].append(f"{symbol},atr={atr:.2f}")
+
+        for key, value in at_ema.items():
+            if value:
+                print(f"at {key}: {value}")
+        if perfect_up_trend:
+            print(f"In perfect uptrend: {perfect_up_trend}")
+        if ema10_down:
+            print(f"ema10 down: {ema10_down}")
+                                            
         print("\n\n")
         return None
 

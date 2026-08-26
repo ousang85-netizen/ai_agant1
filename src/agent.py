@@ -9,33 +9,63 @@ import pandas as pd
 import time
 import os
 import re
+from datetime import date, datetime, timedelta
+#pip install pyfiglet
+#import pyfiglet
+from print_chinese import print_big_chinese, print_highlight_chinese
 
-import data
+#import data
 from schwab import SchwabClient
 from ticker_scanner import collect_all_exchange_tickers
 from technical_analyze import TechnicalAnalyzer
-
+from MyListProcessor import MyListProcessor
+YELLOW = '\033[33m'
+RESET = '\033[0m'
 
 class TradingAgent:
 
+    _ta = None
     def __init__(self):
         pass
-
+        TradingAgent._ta = TechnicalAnalyzer()
     def background_task(self, stop_event):
-        ta = TechnicalAnalyzer()
+
+        list_processor = MyListProcessor()
 
         while not stop_event.is_set():
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
-            time.sleep(3)
+            time.sleep(200)
+            minutes = TradingAgent._ta.market_open_minute()
+            #print(YELLOW + "               遵 守 交 易 纪 律" + RESET)
+            #big_text = pyfiglet.figlet_format(" 遵 守 交 易 纪 律 ")
+            #big_text = pyfiglet.figlet_format(" windows ")
+            print_highlight_chinese("      遵 守 交 易 纪 律      ")
+
+            if minutes < 0:
+                print("Remember analyst SPY/QQQ, even stock at buy price, Indexes need to support to buy, stay away if Index intraday is downtrend")
             ## doji
-            ta.show_doji()
+            print("-" * 20 + " checking doji " + "-" * 20)
+            self._ta.show_doji()
             ## Vix
-            ta.vix_elevated()
+            print("-" * 20 + " checking vix spike " + "-" * 20)
+            self._ta.vix_elevated()
+
             ## check moving average
-            ta.check_with_ema()
+            print("-" * 20 + " checking if nearing ema " + "-" * 20)
+            self._ta.check_with_ema()
+
+            ## check rsi divergence
             ## check if I should sell for profit
             ## check if I should sell for stop loss
+            list_processor.process_my_position()
+            ## process wait_list.csv
+            print("-" * 20 + " checking stocks reach to buy level " + "-" * 20)
+            list_processor.process_wait_list()
+            ## check buy signal: macd crossover below 0; marvini;  reach support ema; 
+            ## check reverse signal: 5ema break 10 ema, etc
+            
+
 
         print("[Background Thread] Stopped.")
    
@@ -72,7 +102,12 @@ class TradingAgent:
                 break
             else:
                 print(f"You typed: {user_input}")
-                self.interpret_trade_command(user_input)
+                response = self.interpret_trade_command(user_input)
+                if response != None and response.status_code >= 200 and response.status_code < 300:
+                    ## need to add order reason for it
+                    trade_reason = input("Trade reason: ").strip()
+                    with open("order_book.txt", "a", encoding="utf-8 ") as file:
+                        file.write(f"{datetime.now()}: {user_input} - [{trade_reason}]")
 
         # Wait for the background thread to finish cleaning up
         t.join()
@@ -119,6 +154,12 @@ class TradingAgent:
         Parses an unstructured English phrase and converts it into a machine-readable 
         dictionary containing: action, quantity, symbol, and price.
         """
+
+        minutes = TradingAgent._ta.market_open_minute()
+        if minutes <= 5:
+            print("Do not start trade yet, wait for 5min after open.")
+            return None
+                    
         # Normalize command to lowercase for clean matching
         clean_command = command.strip().lower()
         
@@ -143,10 +184,11 @@ class TradingAgent:
         
         client = SchwabClient()
         if data["action"] == "oco":
-            client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
+            response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
         elif data["action"] == "stop" or data["action"] == "sell" or data["action"] == "buy":
-            client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action=data["action"], price=float(data['price']))
-        return None                 
+            response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action=data["action"], price=float(data['price']))
+
+        return response                 
 
 
 if __name__ == "__main__":
