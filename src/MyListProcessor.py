@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from technical_analyze import TechnicalAnalyzer
+import time
 
 RED = '\033[31m'
 GREEN = '\033[32m'
@@ -30,6 +31,7 @@ class MyListProcessor:
         MyListProcessor.wait_list = pd.read_csv('src/wait_list.csv')
         MyListProcessor.my_positions = pd.read_csv('src/my_positions.csv')
         MyListProcessor._tech_analyzer = TechnicalAnalyzer()
+
         MyListProcessor._initialized = True
 
     def process_wait_list(self):
@@ -61,42 +63,48 @@ class MyListProcessor:
             quote = self._tech_analyzer._schwab_client.get_quote(symbol)
             last_price =  quote[symbol.upper()]['quote']['lastPrice'] 
             atr = self._tech_analyzer.stock_info.get(symbol, {}).get("atr").iloc[-1]
-
-            if not pd.isna(stop):
+            need_sell  = False
+            if not pd.isna(stop) and last_price <= float(stop):
                 # 1
-                if  last_price <= stop:
-                    print(RED + f"{symbol} is below stop limit, sell NOW!!")
-            elif not pd.isna(target) and last_price >= target:
-                    print(RED + f"{symbol} has reached target, sell NOW!!")
+                print(RED + f"{symbol} is below stop limit {stop}, sell NOW!!")
+                need_sell = True
+            elif not pd.isna(target) and last_price >= float(target):
+                    print(RED + f"{symbol} has reached target {target}, sell NOW!!")
+                    need_sell = True
             else:
                 history = self._tech_analyzer.stock_info.get(symbol, {}).get("history")
                 prev_close = history["Close"].iloc[-1][symbol.upper()]
                 ema10_val1 = self._tech_analyzer.stock_info.get(symbol, {}).get("ema10").iloc[-1][symbol.upper()] 
-                ema10_val2 = self._tech_analyzer.stock_info.get(symbol, {}).get("ema10").iloc[-2][symbol.upper()] 
+                ema10_val2 = self._tech_analyzer.stock_info.get(symbol, {}).get("ema10").iloc[-3][symbol.upper()] 
 
                 rised = self._tech_analyzer.check_rising_price(history, 25)
                 text = ""
                 # 2
-                if rised['is_rising'] and rised['percent_change'] > 20:
-                    text += "rised over 20%; "
+                if rised['is_rising'] and rised['percent_change'] > 25:
+                    text += "rised over 25%; "
+                    need_sell = True
                 #3.
                 if last_price < prev_close * 0.96:  
                     text += " is having s sudden drop"
+                    need_sell = True
                 #4 
                 if  ema10_val1 < ema10_val2:
                     text += "ema10 bending downward "
-
+                    need_sell = True
                 if not pd.isna(cost):
-                    if (cost - last_price)/last_price > 0.04:
+                    if (float(cost) - last_price)/last_price > 0.04:
                         text += "loss is more than 4%"
+                        need_sell = True
 
-                if text is not None:
-                    print(YELLOW + f"{symbol}: {text}")
+                if text is not "":
+                    print(RED + f"{symbol}: {text}")
+
+            if need_sell:
+                self._tech_analyzer.speak(f"Sell {symbol.upper()}")
 
         print(RESET + "\n")
-
-
 
 if __name__ == "__main__":
     ml = MyListProcessor()
     ml.process_wait_list()
+    ml.process_my_position()

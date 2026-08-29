@@ -1,16 +1,17 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import yfinance as yf
+import pyttsx3
+import time
 from datetime import date, datetime, timedelta
 
 from schwab import SchwabClient
 from data import get_data
 
-
 class TechnicalAnalyzer:
 
     stock_list = ["^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
-                  "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", 
+                  "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", "arm",
                   "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
                   "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx",
                   "afrm", "akam", "alab", "crcl", "crsp", "fsly", "gdx", "ionq", "stx", "ttmi", "avav", "cohr","p",
@@ -19,7 +20,7 @@ class TechnicalAnalyzer:
     #end_date = datetime.now()
     _schwab_client = None  # Placeholder for SchwabClient instance
     _initialized = False
-
+    #_text_to_speech = None
     def check_rising_price(self, history: pd.DataFrame, lookback: int = 10) -> dict:
         """Find the previous low and report the price recovery from that point."""
         if lookback < 1:
@@ -71,6 +72,8 @@ class TechnicalAnalyzer:
             print ("TechnicalAnalyzer already initialized")
             return None
         
+        #self._text_to_speech = pyttsx3.init()
+        #self._text_to_speech.setProperty('rate', 150)
         for ticker in self.stock_list:
             self.fetch_data(ticker, '1y', '1d')
 
@@ -85,6 +88,16 @@ class TechnicalAnalyzer:
         TechnicalAnalyzer._schwab_client = SchwabClient()  # Initialize SchwabClient instance
         TechnicalAnalyzer._initialized = True
         return None
+    
+    def speak(self, text):
+        text_to_speech = pyttsx3.init()
+        text_to_speech.setProperty('rate', 150)
+
+        text_to_speech.say(text)
+
+        # Block the script until the speaking is finished
+        text_to_speech.runAndWait()
+        time.sleep(1)
 
     def fetch_data(self, symbol,  data_period: str = "1y", interval: str = "1d"):
         """Fetch historical stock data from Yahoo Finance."""
@@ -232,9 +245,30 @@ class TechnicalAnalyzer:
         if ema10_down:
             print(f"ema10 down: {ema10_down}")
                                             
-        print("\n\n")
+        #print("\n\n")
         return None
 
+    def get_atr(self, symbol):
+        if symbol in self.stock_list:
+            atr = self.stock_info.get(symbol, {}).get("atr").iloc[-1]
+            return None, atr
+
+        print(f"Fetching data for {symbol}...")
+        data = get_data(symbol, period="3mo", interval='1d')
+        if data.empty:
+            raise ValueError(
+                f"No data found for {symbol}. Check ticker symbol or date range."
+            )
+                ## calculate ATR
+        high_low = data["High"] - data["Low"]
+        high_close = abs(data["High"] - data["Close"].shift())
+        low_close = abs(data["Low"] - data["Close"].shift())
+
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr =  true_range.rolling(window=14).mean()
+
+        return atr
+    
     def plot_data(self):
         """Plot the stock's closing price and EMAs."""
 
@@ -264,5 +298,7 @@ class TechnicalAnalyzer:
 
 if __name__ == "__main__":
     analyzer = TechnicalAnalyzer()
-    analyzer.plot_data()
+    analyzer.speak("Hi, you know how to sell ?")
+    analyzer.speak("Hi, you know how to buy ?")
+    #analyzer.plot_data()
     print("Technical analysis completed.")

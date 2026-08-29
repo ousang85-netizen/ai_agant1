@@ -28,14 +28,15 @@ class TradingAgent:
     def __init__(self):
         pass
         TradingAgent._ta = TechnicalAnalyzer()
+
     def background_task(self, stop_event):
 
         list_processor = MyListProcessor()
-
+        scan_freq = 6
         while not stop_event.is_set():
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
-            time.sleep(200)
+            time.sleep(3)
             minutes = TradingAgent._ta.market_open_minute()
             #print(YELLOW + "               遵 守 交 易 纪 律" + RESET)
             #big_text = pyfiglet.figlet_format(" 遵 守 交 易 纪 律 ")
@@ -58,12 +59,18 @@ class TradingAgent:
             ## check rsi divergence
             ## check if I should sell for profit
             ## check if I should sell for stop loss
+            print("-" * 20 + " checking my positions" + "-" * 20)
             list_processor.process_my_position()
             ## process wait_list.csv
             print("-" * 20 + " checking stocks reach to buy level " + "-" * 20)
             list_processor.process_wait_list()
-            ## check buy signal: macd crossover below 0; marvini;  reach support ema; 
-            ## check reverse signal: 5ema break 10 ema, etc
+
+            ## scan for big pool
+            if --scan_freq  == 0:
+                scan_freq = 6
+                print("Perform scan task")
+                ## check buy signal: macd crossover below 0; marvini;  reach support ema; 
+                ## check reverse signal: 5ema break 10 ema, etc
             
 
 
@@ -84,9 +91,9 @@ class TradingAgent:
 
         '''
 
-        stop_event = threading.Event()
 
         # Start the background thread
+        stop_event = threading.Event()
         t = threading.Thread(target=self.background_task, args=(stop_event,), daemon=True)
         t.start()
 
@@ -107,7 +114,7 @@ class TradingAgent:
                     ## need to add order reason for it
                     trade_reason = input("Trade reason: ").strip()
                     with open("order_book.txt", "a", encoding="utf-8 ") as file:
-                        file.write(f"{datetime.now()}: {user_input} - [{trade_reason}]")
+                        file.write(f"{datetime.now()}: {user_input} - [{trade_reason}]\n")
 
         # Wait for the background thread to finish cleaning up
         t.join()
@@ -173,23 +180,40 @@ class TradingAgent:
         # Pattern for OCO order: "oco 100 soxl at 148 and 142"
         oco_pattern = r"(?P<action>oco)\s+(?P<quantity>\d+)\s+(?P<symbol>[a-z0-9\.]+?)\s+at\s+(?P<price>\d+(\.\d+)?)\s+and\s+(?P<stop_price>\d+(\.\d+)?)"   
 
-        match = re.match(pattern, clean_command)
+
+        # Now check for trade command
+        match = re.match(pattern, clean_command) 
         if not match:
             match = re.match(oco_pattern, clean_command)
-        if not match:
-            print(f"Could not interpret phrase: '{command}'. Please use format 'buy [qty] [symbol] at [price]' or 'oco [qty] [symbol] at [price] and [stop_price]'.")
-            return None
-
-        data = match.groupdict()
+        if match:
+            #print(f"Could not interpret phrase: '{command}'. Please use format 'buy [qty] [symbol] at [price]' or 'oco [qty] [symbol] at [price] and [stop_price]'.")
+            #return None
+            # match a order command
+            data = match.groupdict()
         
-        client = SchwabClient()
-        if data["action"] == "oco":
-            response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
-        elif data["action"] == "stop" or data["action"] == "sell" or data["action"] == "buy":
-            response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action=data["action"], price=float(data['price']))
+            client = SchwabClient()
+            if data["action"] == "oco":
+                response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
+            elif data["action"] == "stop" or data["action"] == "sell" or data["action"] == "buy":
+                response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action=data["action"], price=float(data['price']))
 
-        return response                 
+            return response
 
+        # now check for get stock info command
+        get_pattern = r"^get\s+(?P<metric>\w+)\s+of\s+(?P<symbol>\w+)$"
+        match = re.match(get_pattern, clean_command)   
+        if match:
+            data = match.groupdict()
+            if data["metric"] == "get":
+                atr = cls._ta.get_str(data['symbol'])
+                if atr != None:
+                    print(f"{data['symbol']}'s ATR = {value}")
+                else:
+                    print(f"get ATR error, code={response.status_code}")      
+                return None 
+
+        print(f"Not yet support this command: {clean_command}")
+        return None 
 
 if __name__ == "__main__":
     import sys
