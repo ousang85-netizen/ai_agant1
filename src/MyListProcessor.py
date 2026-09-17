@@ -42,8 +42,17 @@ class MyListProcessor:
                 continue
             quote = self._tech_analyzer._schwab_client.get_quote(symbol)
             atr = self._tech_analyzer.stock_info.get(symbol, {}).get("atr").iloc[-1]
-            if abs(row['price'] - quote[symbol.upper()]['quote']['lastPrice'])/atr < 0.2:
-                print(f"{symbol} is at buy price {quote[symbol.upper()]['quote']['lastPrice']}")
+            cur_price =  quote[symbol.upper()]['quote']['lastPrice']
+            ema50_val = self._tech_analyzer.stock_info.get(symbol, {}).get("ema50").iloc[-1][symbol.upper()] 
+            ema100_val = self._tech_analyzer.stock_info.get(symbol, {}).get("ema100").iloc[-1][symbol.upper()] 
+
+            if abs(float(row['price']) - cur_price)/atr < 0.2:
+                print(f"{symbol} is at buy price {cur_price}")
+            elif abs(cur_price - ema100_val)/atr < 0.2:
+                print(f"{symbol} is at 100ema ({cur_price})")
+            elif abs(cur_price - ema50_val)/atr < 0.2:
+                print(f"{symbol} is at 50ema ({cur_price})")
+                
 
     def process_my_position(self):
         #  sell criteria: remember your problem is that you do not sell, you should even it end up with 
@@ -80,8 +89,8 @@ class MyListProcessor:
                 rised = self._tech_analyzer.check_rising_price(history, 25)
                 text = ""
                 # 2
-                if rised['is_rising'] and rised['percent_change'] > 25:
-                    text += "rised over 25%; "
+                if rised['is_rising'] and rised['percent_change'] > 30:
+                    text += "rised over 30%; "
                     need_sell = True
                 #3.
                 if last_price < prev_close * 0.96:  
@@ -90,7 +99,6 @@ class MyListProcessor:
                 #4 
                 if  ema10_val1 < ema10_val2:
                     text += "ema10 bending downward "
-                    need_sell = True
                 if not pd.isna(cost):
                     if (float(cost) - last_price)/last_price > 0.04:
                         text += "loss is more than 4%"

@@ -10,10 +10,10 @@ from data import get_data
 
 class TechnicalAnalyzer:
 
-    stock_list = ["^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", 
+    stock_list = ["^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", "aehr",
                   "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", "arm",
-                  "sndk", "tsla", "nvda", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
-                  "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx",
+                  "sndk", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
+                  "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx","mrvi", "ions", "lly","ibit","rcl",
                   "afrm", "akam", "alab", "crcl", "crsp", "fsly", "gdx", "ionq", "stx", "ttmi", "avav", "cohr","p",
                   "xlv", "xlre", "xle", "xlp", "xlu"]    
     stock_info = {}
@@ -90,8 +90,10 @@ class TechnicalAnalyzer:
         return None
     
     def speak(self, text):
+
         text_to_speech = pyttsx3.init()
         text_to_speech.setProperty('rate', 150)
+        text_to_speech.setProperty('volume', 0.15)
 
         text_to_speech.say(text)
 
@@ -124,7 +126,7 @@ class TechnicalAnalyzer:
             "ema100": data["Close"].ewm(span=100, adjust=False).mean(),
             "ema150": data["Close"].ewm(span=150, adjust=False).mean(),
             "ema200": data["Close"].ewm(span=200, adjust=False).mean(),
-            "atr":  true_range.rolling(window=14).mean(),
+            "atr":  true_range.ewm(alpha=1/14, adjust=False).mean(),
         }
         self.stock_info[symbol] = new_ele
 
@@ -250,8 +252,8 @@ class TechnicalAnalyzer:
 
     def get_atr(self, symbol):
         if symbol in self.stock_list:
-            atr = self.stock_info.get(symbol, {}).get("atr").iloc[-1]
-            return None, atr
+            atr = self.stock_info.get(symbol, {}).get("atr").dropna().iloc[-1]
+            return atr
 
         print(f"Fetching data for {symbol}...")
         data = get_data(symbol, period="3mo", interval='1d')
@@ -265,9 +267,9 @@ class TechnicalAnalyzer:
         low_close = abs(data["Low"] - data["Close"].shift())
 
         true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        atr =  true_range.rolling(window=14).mean()
+        atr =  true_range.ewm(alpha=1/14, adjust=False).mean()
 
-        return atr
+        return atr.iloc[-1]
     
     def plot_data(self):
         """Plot the stock's closing price and EMAs."""

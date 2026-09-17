@@ -37,9 +37,12 @@ def print_highlight_chinese (text):
     # Draw a continuous line breaker
     console.print("=" * 40, style="bold red")
     console.print(text, style="bold white on yellow")
-    console.print(text, style="bold white on yellow")
-    console.print(text, style="bold white on yellow")
+    #console.print(text, style="bold white on yellow")
+    #console.print(text, style="bold white on yellow")
     console.print("=" * 40, style="bold red")
 
+    #console.print("\nAction: If qcom does not go up today, sell qcom option; sell tsla put; sell qqq call, \n", style="bold white on yellow")
+    #console.print("\nAction: sell put glw at 140, \n", style="bold white on yellow")
+        
 if __name__ == "__main__":
     print_highlight_chinese(" 遵 守 交 易 纪 律")

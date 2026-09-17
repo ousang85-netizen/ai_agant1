@@ -16,6 +16,7 @@ from print_chinese import print_big_chinese, print_highlight_chinese
 
 #import data
 from schwab import SchwabClient
+#from src import data
 from ticker_scanner import collect_all_exchange_tickers
 from technical_analyze import TechnicalAnalyzer
 from MyListProcessor import MyListProcessor
@@ -33,18 +34,29 @@ class TradingAgent:
 
         list_processor = MyListProcessor()
         scan_freq = 6
+        stop_event.wait(timeout=2.0)
         while not stop_event.is_set():
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
-            time.sleep(3)
             minutes = TradingAgent._ta.market_open_minute()
             #print(YELLOW + "               遵 守 交 易 纪 律" + RESET)
             #big_text = pyfiglet.figlet_format(" 遵 守 交 易 纪 律 ")
             #big_text = pyfiglet.figlet_format(" windows ")
-            print_highlight_chinese("      遵 守 交 易 纪 律      ")
+            print_highlight_chinese("      遵 守 交 易 纪 律      \n      遵 守 交 易 纪 律      \n      遵 守 交 易 纪 律      ")
 
             if minutes < 0:
                 print("Remember analyst SPY/QQQ, even stock at buy price, Indexes need to support to buy, stay away if Index intraday is downtrend")
+
+            if minutes > 25 and minutes < 40:
+                 self._ta.speak("Check for any chance to buy strong stock during price dip in the morning")
+
+            if minutes > 120 and minutes < 180:
+                print_highlight_chinese("TO-DO: CLOSE OUT ALL Holdings in schwab account.")
+                self._ta.speak("CLOSE OUT ALL Holdings in schwab account.")
+
+            if minutes > 360:
+                print_highlight_chinese("TO-DO: 1. Check marekt sentiment, 2. Check Index/stock structure 3. If market is bearish, stay out")
+                                        
             ## doji
             print("-" * 20 + " checking doji " + "-" * 20)
             self._ta.show_doji()
@@ -71,7 +83,10 @@ class TradingAgent:
                 print("Perform scan task")
                 ## check buy signal: macd crossover below 0; marvini;  reach support ema; 
                 ## check reverse signal: 5ema break 10 ema, etc
-            
+            print(f"\n[Background Thread] Cycle complete. Waiting for next interval...")
+            was_signaled = stop_event.wait(timeout=200)
+            if was_signaled:
+                break
 
 
         print("[Background Thread] Stopped.")
@@ -111,13 +126,12 @@ class TradingAgent:
                 print(f"You typed: {user_input}")
                 response = self.interpret_trade_command(user_input)
                 if response != None and response.status_code >= 200 and response.status_code < 300:
-                    ## need to add order reason for it
-                    trade_reason = input("Trade reason: ").strip()
-                    with open("order_book.txt", "a", encoding="utf-8 ") as file:
-                        file.write(f"{datetime.now()}: {user_input} - [{trade_reason}]\n")
+                    print(f"command processes:{user_input}")
 
         # Wait for the background thread to finish cleaning up
-        t.join()
+        t.join(timeout=30.0)
+        if t.is_alive():
+            print("Background thread refused to exit in time. Forcing shutdown...") 
 
 
     def scan_tickers(self, exchanges=None, min_volume=1500000, min_close=5.0):
@@ -163,9 +177,7 @@ class TradingAgent:
         """
 
         minutes = TradingAgent._ta.market_open_minute()
-        if minutes <= 5:
-            print("Do not start trade yet, wait for 5min after open.")
-            return None
+
                     
         # Normalize command to lowercase for clean matching
         clean_command = command.strip().lower()
@@ -186,6 +198,10 @@ class TradingAgent:
         if not match:
             match = re.match(oco_pattern, clean_command)
         if match:
+            if minutes <= 5:
+                print("Do not start trade yet, wait for 5min after open.")
+                return None
+
             #print(f"Could not interpret phrase: '{command}'. Please use format 'buy [qty] [symbol] at [price]' or 'oco [qty] [symbol] at [price] and [stop_price]'.")
             #return None
             # match a order command
@@ -193,10 +209,15 @@ class TradingAgent:
         
             client = SchwabClient()
             if data["action"] == "oco":
-                response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
+                response, order_id = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
             elif data["action"] == "stop" or data["action"] == "sell" or data["action"] == "buy":
-                response = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action=data["action"], price=float(data['price']))
+                response, order_id = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action=data["action"], price=float(data['price']))
 
+            if response != None and response.status_code >= 200 and response.status_code < 300:
+                ## need to add order reason for it
+                trade_reason = input("Trade reason: ").strip()
+                with open("order_book.txt", "a", encoding="utf-8 ") as file:
+                    file.write(f"{datetime.now()}: {clean_command};{order_id};[{trade_reason}]\n")
             return response
 
         # now check for get stock info command
@@ -204,13 +225,41 @@ class TradingAgent:
         match = re.match(get_pattern, clean_command)   
         if match:
             data = match.groupdict()
-            if data["metric"] == "get":
-                atr = cls._ta.get_str(data['symbol'])
+            if data["metric"] == "atr":
+                atr = TradingAgent._ta.get_atr(data['symbol'])
                 if atr != None:
-                    print(f"{data['symbol']}'s ATR = {value}")
+                    print(f"{data["symbol"]}'s ATR = {atr}")
                 else:
-                    print(f"get ATR error, code={response.status_code}")      
+                    print(f"get {data["symbol"]} ATR error")      
                 return None 
+        #get fly call at 7590
+        #get spread call at 7590
+        pattern = r"^get\s+(?P<type>\w+)\s+(?P<callput>\w+)\s+at\s+(?P<value>\d+)$"
+        match = re.match(pattern, clean_command)   
+        if match:
+            data = match.groupdict()
+            client = SchwabClient()
+            if data["type"] == "fly":
+                v = float(data['value'])
+                response = client.get_butterfly_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), mid_strike=v, lower_strike=v-10, upper_strike=v+10)
+                if response != None and response.status_code >= 200 and response.status_code < 300:
+                    #print(f"fly call at {data['value']} : {response.json()}")
+                    pass
+                else:
+                    print(f"get fly data failed")      
+                return None 
+            elif data["type"] == "spread":
+                v = float(data['value'])
+                response = client.get_spread_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), nearer_strike=v, expiration_date=None, interval=5)
+                if response != None and response.status_code >= 200 and response.status_code < 300:
+                    #print(f"spread call at {data['value']} : {response.json()}")
+                    pass
+                else:
+                    print(f"get spread data failed")      
+                return None
+            else:
+                print(f"Unknown type: {data['type']}. Supported types are 'fly' and 'spread'.")
+                return None
 
         print(f"Not yet support this command: {clean_command}")
         return None 
