@@ -5,6 +5,7 @@
 import threading
 from typing import Dict, Any, List
 from xmlrpc import client
+from click import option
 import pandas as pd
 import time
 import os
@@ -23,6 +24,9 @@ from MyListProcessor import MyListProcessor
 YELLOW = '\033[33m'
 RESET = '\033[0m'
 
+open_orders = []
+#order_book...
+
 class TradingAgent:
 
     _ta = None
@@ -33,8 +37,16 @@ class TradingAgent:
     def background_task(self, stop_event):
 
         list_processor = MyListProcessor()
-        scan_freq = 6
+        loop_period_sec = 200
+        scan_freq = 3
+        data_save_freq = 1
+        scan_freq_counter = 0
+        data_save_counter = 0
         stop_event.wait(timeout=2.0)
+        cur = datetime.now()
+        spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
+        spx_quote_fd = open(spx_quote_filename, "a", encoding="utf-8")
+
         while not stop_event.is_set():
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
@@ -77,18 +89,36 @@ class TradingAgent:
             print("-" * 20 + " checking stocks reach to buy level " + "-" * 20)
             list_processor.process_wait_list()
 
+
             ## scan for big pool
-            if --scan_freq  == 0:
-                scan_freq = 6
+            if scan_freq_counter == 0:
+                scan_freq_counter = scan_freq_counter
                 print("Perform scan task")
                 ## check buy signal: macd crossover below 0; marvini;  reach support ema; 
-                ## check reverse signal: 5ema break 10 ema, etc
+                ## check reverse signal: 
+                # 5ema break 10 ema, etc
+                # candle stick show reverse signal after a long drop, etc
+            scan_freq_counter -= 1
+
+                
+            if data_save_counter == 0:
+                data_save_counter = data_save_freq
+                print("Perform data save task")
+                ## save data to csv for later analysis
+                if minutes < 0 or minutes > 330:
+                    item =  self._ta._schwab_client.get_option_chain_data_list('$SPX')
+                    for s in item:
+                        spx_quote_fd.write(s+"\n")
+
+                data_save_counter= data_save_freq
+            data_save_counter -= 1
+           
             print(f"\n[Background Thread] Cycle complete. Waiting for next interval...")
-            was_signaled = stop_event.wait(timeout=200)
+            was_signaled = stop_event.wait(timeout=loop_period_sec)
             if was_signaled:
                 break
 
-
+        spx_quote_fd.close()
         print("[Background Thread] Stopped.")
    
     def run(self):
@@ -232,34 +262,84 @@ class TradingAgent:
                 else:
                     print(f"get {data["symbol"]} ATR error")      
                 return None 
+            
         #get fly call at 7590
+        #get fly call at 7590 yyyy-mm-dd
         #get spread call at 7590
-        pattern = r"^get\s+(?P<type>\w+)\s+(?P<callput>\w+)\s+at\s+(?P<value>\d+)$"
-        match = re.match(pattern, clean_command)   
+        #get spread call at 7590 yyyy-mm-dd
+        option_pattern_1 = r"^get\s+(?P<type>\w+)\s+(?P<callput>\w+)\s+at\s+(?P<value>\d+)$"
+        option_pattern_2 = r"^get\s+(?P<type>\w+)\s+(?P<callput>\w+)\s+at\s+(?P<value>\d+)\s+(?P<expiry>\d{4}-\d{2}-\d{2})$"
+
+        expiry_date = None
+        match = re.match(option_pattern_1, clean_command)   
+        if not match:
+            match = re.match(option_pattern_2, clean_command)
         if match:
             data = match.groupdict()
+            if "expiry" in data and data["expiry"]:
+                expiry_date = datetime.strptime(data["expiry"], "%Y-%m-%d").date()
+                if expiry_date < date.today():
+                    print(f"Expiry date {data['expiry']} is in the past. Please provide a valid future date.")
+                    return None
+                
             client = SchwabClient()
             if data["type"] == "fly":
                 v = float(data['value'])
-                response = client.get_butterfly_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), mid_strike=v, lower_strike=v-10, upper_strike=v+10)
-                if response != None and response.status_code >= 200 and response.status_code < 300:
-                    #print(f"fly call at {data['value']} : {response.json()}")
-                    pass
-                else:
-                    print(f"get fly data failed")      
+                client.get_butterfly_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), \
+                                                      lower_strike=v-10, mid_strike=v, upper_strike=v+10, expiration_date=expiry_date)
                 return None 
             elif data["type"] == "spread":
                 v = float(data['value'])
-                response = client.get_spread_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), nearer_strike=v, expiration_date=None, interval=5)
-                if response != None and response.status_code >= 200 and response.status_code < 300:
-                    #print(f"spread call at {data['value']} : {response.json()}")
-                    pass
-                else:
-                    print(f"get spread data failed")      
+                client.get_spread_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), \
+                                        sell_strike=v, expiration_date=expiry_date)
                 return None
             else:
                 print(f"Unknown type: {data['type']}. Supported types are 'fly' and 'spread'.")
                 return None
+
+        #buy fly at 7590
+        #buy spread at 7590
+        multileg_option_order_pattern = pattern = r"(?P<action>buy|sell)\s+(?P<strategy>fly|spread)\s+at\s+(?P<price>\d+)"
+        match = re.match(multileg_option_order_pattern, clean_command)   
+        if match:
+            client = SchwabClient()
+            data = match.groupdict()
+            if data["strategy"] == "fly":
+                print(f"Placing a butterfly option order at {data['price']}")
+                price = float(data['price'])
+                # Implement the logic to place a butterfly option order
+                response, order_id = client.place_butterfly_order(underlying_symbol = '$SPX', expiration_date = None, \
+                                                                lower_strike = price-10, middle_strike = price, upper_strike = price+10,
+                                                                quantity = 1, action = "BUY")
+                
+    
+                if response != None and response.status_code >= 200 and response.status_code < 300:
+                    print(f"Spread order placed successfully. Order ID: {order_id}")
+                else:
+                    print(f"Failed to place butterfly order. Status code: {response.status_code}, Response: {response.text}")
+
+                # Implement the logic to place a butterfly option order
+            elif data["strategy"] == "spread":
+                print(f"Placing a spread option order at {data['price']}")
+                
+                # Implement the logic to place a spread option order
+                response, order_id = client.place_credit_spread_order(underlying_symbol = '$SPX', expiration_date = None, \
+                                                                sell_strike = float(data['price']), \
+                                                                leg_interval = 5, quantity = 1)
+    
+                if response != None and response.status_code >= 200 and response.status_code < 300:
+                    print(f"Spread order placed successfully. Order ID: {order_id}")
+                else:
+                    print(f"Failed to place spread order. Status code: {response.status_code}, Response: {response.text}")
+            else:
+                print(f"Unknown strategy: {data['strategy']}. Supported strategies are 'fly' and 'spread'.")        
+    
+            if response != None and response.status_code >= 200 and response.status_code < 300:
+                ## need to add order reason for it
+                trade_reason = input("Trade reason: ").strip()
+                with open("order_book.txt", "a", encoding="utf-8 ") as file:
+                    file.write(f"{datetime.now()}: {clean_command};{order_id};[{trade_reason}]\n")
+            return response
 
         print(f"Not yet support this command: {clean_command}")
         return None 

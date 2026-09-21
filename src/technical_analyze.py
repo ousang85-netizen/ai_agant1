@@ -15,7 +15,9 @@ class TechnicalAnalyzer:
                   "sndk", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
                   "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx","mrvi", "ions", "lly","ibit","rcl",
                   "afrm", "akam", "alab", "crcl", "crsp", "fsly", "gdx", "ionq", "stx", "ttmi", "avav", "cohr","p",
-                  "xlv", "xlre", "xle", "xlp", "xlu"]    
+                  "inod", "qcom", "crwd", "twlo", "cost", "avgo",
+                  "xlv", "xlre", "xle", "xlp", "xlu", "cboe"]    
+
     stock_info = {}
     #end_date = datetime.now()
     _schwab_client = None  # Placeholder for SchwabClient instance
@@ -93,7 +95,7 @@ class TechnicalAnalyzer:
 
         text_to_speech = pyttsx3.init()
         text_to_speech.setProperty('rate', 150)
-        text_to_speech.setProperty('volume', 0.15)
+        text_to_speech.setProperty('volume', 0.05)
 
         text_to_speech.say(text)
 

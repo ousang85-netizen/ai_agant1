@@ -34,6 +34,11 @@ class MyListProcessor:
 
         MyListProcessor._initialized = True
 
+    def single_position_analysis(self, symbol):
+        # track and analyze my holding each day,  collect data and analyze it, and make decision to sell or hold
+        # to-do
+        pass
+
     def process_wait_list(self):
 
         for index, row in self.wait_list.iterrows():
@@ -47,9 +52,10 @@ class MyListProcessor:
             ema100_val = self._tech_analyzer.stock_info.get(symbol, {}).get("ema100").iloc[-1][symbol.upper()] 
 
             if abs(float(row['price']) - cur_price)/atr < 0.2:
-                print(f"{symbol} is at buy price {cur_price}")
+                print(RED+f"{symbol} is at buy price {cur_price}" + RESET)
+                self._tech_analyzer.speak(f"{symbol} is at buy price")
             elif abs(cur_price - ema100_val)/atr < 0.2:
-                print(f"{symbol} is at 100ema ({cur_price})")
+                print(BLUE+f"{symbol} is at 100ema ({cur_price})" + RESET)
             elif abs(cur_price - ema50_val)/atr < 0.2:
                 print(f"{symbol} is at 50ema ({cur_price})")
                 
@@ -85,22 +91,24 @@ class MyListProcessor:
                 prev_close = history["Close"].iloc[-1][symbol.upper()]
                 ema10_val1 = self._tech_analyzer.stock_info.get(symbol, {}).get("ema10").iloc[-1][symbol.upper()] 
                 ema10_val2 = self._tech_analyzer.stock_info.get(symbol, {}).get("ema10").iloc[-3][symbol.upper()] 
+                ema20_val = self._tech_analyzer.stock_info.get(symbol, {}).get("ema20").iloc[-1][symbol.upper()] 
 
                 rised = self._tech_analyzer.check_rising_price(history, 25)
                 text = ""
                 # 2
-                if rised['is_rising'] and rised['percent_change'] > 30:
-                    text += "rised over 30%; "
+                if rised['is_rising'] and rised['percent_change'] > 50:
+                    text += f"rised over {rised['percent_change']:.2f}%; "
                     need_sell = True
                 #3.
                 if last_price < prev_close * 0.96:  
                     text += " is having s sudden drop"
                     need_sell = True
-                #4 
-                if  ema10_val1 < ema10_val2:
-                    text += "ema10 bending downward "
+                #4 check if the 10ema is bending down and it just touched 20ema, then sell it.  This is a strong signal that the stock is going down.
+                if  ema10_val1 < ema10_val2 and ema10_val1 <= ema20_val:
+                    text += "ema10 bending downward and touch/break ema20 "
+                    #need_sell = True
                 if not pd.isna(cost):
-                    if (float(cost) - last_price)/last_price > 0.04:
+                    if (float(cost) - last_price)/last_price > 0.06:
                         text += "loss is more than 4%"
                         need_sell = True
 
