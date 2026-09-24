@@ -105,7 +105,7 @@ class TradingAgent:
                 data_save_counter = data_save_freq
                 print("Perform data save task")
                 ## save data to csv for later analysis
-                if minutes < 0 or minutes > 330:
+                if minutes >= 0 and minutes <= 1000:#390:
                     item =  self._ta._schwab_client.get_option_chain_data_list('$SPX')
                     for s in item:
                         spx_quote_fd.write(s+"\n")

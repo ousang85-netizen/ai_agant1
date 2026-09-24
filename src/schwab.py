@@ -724,6 +724,12 @@ class SchwabClient:
 
 if __name__ == "__main__":
     client = SchwabClient()
+    a = client.order_details()  # Get details of the last order placed
+    all=SchwabClient.account_orders().json()
+    for order in all:
+        if 'orderLegCollection' in order:
+            print(order['orderLegCollection'][0]['instrument']['symbol'])
+
     '''
     holdings = client.get_account_holdings()    
     print("\nStock Holdings:")

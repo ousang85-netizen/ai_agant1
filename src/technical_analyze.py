@@ -14,8 +14,8 @@ class TechnicalAnalyzer:
                   "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", "arm",
                   "sndk", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
                   "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx","mrvi", "ions", "lly","ibit","rcl",
-                  "afrm", "akam", "alab", "crcl", "crsp", "fsly", "gdx", "ionq", "stx", "ttmi", "avav", "cohr","p",
-                  "inod", "qcom", "crwd", "twlo", "cost", "avgo",
+                  "afrm", "akam", "alab", "crcl", "crsp", "fsly", "gdx", "ionq", "stx", "ttmi", "avav", "cohr","p", "xbi",
+                  "inod", "qcom", "crwd", "twlo", "cost", "avgo", "jpm",
                   "xlv", "xlre", "xle", "xlp", "xlu", "cboe"]    
 
     stock_info = {}
