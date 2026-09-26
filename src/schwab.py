@@ -54,7 +54,7 @@ class SchwabClient:
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             cls._instance = super(SchwabClient, cls).__new__(cls)
-            cls._client = schwabdev.Client(appKey, appSecret, callbackUrl)    
+            cls._client = schwabdev.Client(appKey, appSecret, callbackUrl, timeout=30)
             linked_accounts = cls._client.linked_accounts().json()
             cls._account_hash = linked_accounts[0].get('hashValue') # this will get the first linked account
 
@@ -729,6 +729,10 @@ if __name__ == "__main__":
     for order in all:
         if 'orderLegCollection' in order:
             print(order['orderLegCollection'][0]['instrument']['symbol'])
+
+    #to-do:
+    # trade analyze
+
 
     '''
     holdings = client.get_account_holdings()    
