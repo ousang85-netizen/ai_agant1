@@ -51,7 +51,6 @@ class SchwabClient:
 
         profit *= 100
         report += f"profit:{profit:.2f}"
-        print(report)
         return {"report": report, "profit":profit}
 
     @staticmethod
@@ -138,7 +137,6 @@ class SchwabClient:
                 return None
         profit *= 100
         report += f"profit:{profit:.2f}"
-        print(report)
         return {"report": report, "profit":profit}
 
     def get_linked_accounts(self) -> List[Dict]:
@@ -196,15 +194,19 @@ class SchwabClient:
         return self._account_hash
 
     @staticmethod
-    def account_orders(status: str = None, days = 1) -> List[Dict]:
+    def account_orders(status: str = None, days = 0) -> List[Dict]:
         """Get all orders for the Schwab account."""
         end_dt = datetime.now()
+        start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        if days > 0:
+            start_dt = start_dt - timedelta(days-1)
         response = None
-        for moreday in {1,2}:
-            start_dt = end_dt - timedelta(days+moreday)
+        for moreday in range(3):
             response = SchwabClient._client.account_orders(SchwabClient._account_hash, start_dt, end_dt, None, status)  # Return all orders
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 break
+            start_dt = start_dt - timedelta(1)
+
         return response
     
     @staticmethod
@@ -911,7 +913,7 @@ class SchwabClient:
         for report in reports:
             print(report)
         print("-" * 30)
-        print(f"Total: {total}")
+        print(f"Total: {total:.2f}")
 
 if __name__ == "__main__":
     client = SchwabClient()
