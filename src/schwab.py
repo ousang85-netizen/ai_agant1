@@ -200,7 +200,7 @@ class SchwabClient:
         """Get all orders for the Schwab account."""
         end_dt = datetime.now()
         response = None
-        for moreday in {0,1,2}:
+        for moreday in {1,2}:
             start_dt = end_dt - timedelta(days+moreday)
             response = SchwabClient._client.account_orders(SchwabClient._account_hash, start_dt, end_dt, None, status)  # Return all orders
             if response != None and response.status_code >= 200 and response.status_code < 300:
@@ -851,7 +851,8 @@ class SchwabClient:
     @staticmethod
     def genetate_intrday_spx_trade_report():
         all = SchwabClient.account_orders().json()
-
+        if all is None:
+            print("failed to account_orders")
         buy_orders = []
         sell_orders = []
         others = []
@@ -911,7 +912,6 @@ class SchwabClient:
             print(report)
         print("-" * 30)
         print(f"Total: {total}")
-        print("Done")
 
 if __name__ == "__main__":
     client = SchwabClient()
