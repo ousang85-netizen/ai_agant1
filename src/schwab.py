@@ -7,6 +7,10 @@ import schwabdev
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
+try:
+    from .order_manager import OrderManager
+except ImportError:
+    from order_manager import OrderManager
 
 from yfinance import data
 
@@ -21,6 +25,36 @@ class SchwabClient:
     _client = None
     _account_hash = None
     _orders = []
+    _order_manager = None
+
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            #cls._instance = super(SchwabClient, cls).__new__(cls)
+            cls._instance = super().__new__(cls)
+            cls._client = schwabdev.Client(appKey, appSecret, callbackUrl, timeout=30)
+            linked_accounts = cls._client.linked_accounts().json()
+            cls._account_hash = linked_accounts[0].get('hashValue') # this will get the first linked account
+
+        return cls._instance
+
+    def __init__(self):
+        if not self._initialized:
+            self._initialized = True    
+            self._order_manager = OrderManager(self)
+
+    def start_order_monitor_thread(self):
+        self._order_manager.start_monitor_thread()
+
+    def stop_order_monitor_thread(self):
+        self._order_manager.stop()
+
+    def convert_pacific_to_schwab(date_str: str) -> tuple[str, int]:
+
+        #. Attach the Pacific timezone (handles PST/PDT transitions automatically)
+        pacific_aware = date_str.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        
+        return pacific_aware.astimezone(ZoneInfo("UTC"))
 
     @staticmethod
     def ToPacificTime(schwab_time:str):
@@ -39,7 +73,7 @@ class SchwabClient:
         legs = SchwabClient.compose_leg_info(order)
 
         for id in range(len(legs)):
-            report += legs[id]['symbol']
+            report += OrderManager.convert_option_ticker(legs[id]['symbol'])
             report += "; "
             if legs[id]['instruction'].startswith("BUY"):
                 profit -= legs[id]['price'] * legs[id]['quantity']
@@ -55,9 +89,37 @@ class SchwabClient:
 
     @staticmethod
     def compose_leg_info(order):
+        order_legs = order.get("orderLegCollection")
         legs = []
+        for order_leg in order_legs:
+            leg = {}
+            leg['legId'] = order_leg['legId']
+            leg["time"] = SchwabClient.ToPacificTime(order.get("enteredTime"))
+            leg["symbol"] = order_leg.get('instrument').get('symbol')
+            leg["instruction"] = order_leg["instruction"]
+            leg["complexOrderStrategyType"] = order["complexOrderStrategyType"]
+            leg['quantity'] = 0.
+            leg['price'] = 0.
+            legs.append(leg)
+
+        for activity in order.get("orderActivityCollection", []):
+            for execution in activity.get("executionLegs", []):
+                legId = execution.get("legId", 1)
+                leg =next((item for item in legs if item.get("legId") == legId), None)
+                if leg['quantity'] == 0:
+                    leg['quantity'] = float(execution["quantity"])
+                    leg['price'] = float(execution["price"])
+                else:
+                    leg['price'] = ((leg['quantity'] * leg['price']) + (float(execution["quantity"]) *  float(execution["price"])))\
+                          / (leg['quantity'] + execution["quantity"])
+                    leg['quantify'] += float(execution["quantity"])
+        return legs
+
+        '''
+        legs = [] #[None] * len(order['orderLegCollection'])
         ordor_legs = order["orderLegCollection"]
         exec_legs = order["orderActivityCollection"][0]["executionLegs"]
+
         for id in range(len(order['orderLegCollection'])):
             leg = {}
             key = id+1
@@ -74,7 +136,7 @@ class SchwabClient:
                 print(f"Partial order found !!!!!!!!!!!!!!!!!!!!!!!!!!!!")
             legs.append(leg)
         return legs  
-        
+        '''
     @staticmethod
     def compare_multi_leg_option_orders(buy_order: Dict, sell_order: Dict) -> Dict:
         """Compare matching buy and sell option orders and estimate their P&L.
@@ -85,7 +147,8 @@ class SchwabClient:
         # pre-check if two order are pair:
         if buy_order['complexOrderStrategyType'] != sell_order['complexOrderStrategyType']:
             return None
-
+        if buy_order['complexOrderStrategyType'] == 'BUTTERFLY':
+            print ("compare buterfly")
         #need to go through execution legs :
         if 'orderActivityCollection' in buy_order and 'executionLegs' in buy_order["orderActivityCollection"][0]:
             buy_legs = sorted(SchwabClient.compose_leg_info(buy_order), key = lambda x:x["symbol"])
@@ -118,8 +181,8 @@ class SchwabClient:
                 return None
             if buy_legs[id]['symbol'] != sell_legs[id]['symbol']:
                 return None
-            report += buy_legs[id]['symbol']
-            report += "; "
+            report += OrderManager.convert_option_ticker(buy_legs[id]['symbol'])
+            report += ";"
             if buy_legs[id]['instruction'].startswith("BUY"):
                 profit -= buy_legs[id]['price'] * buy_legs[id]['quantity']
             elif buy_legs[id]['instruction'].startswith("SELL"):
@@ -170,18 +233,27 @@ class SchwabClient:
 
         return {"stocks": stocks, "options": options}
 
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super(SchwabClient, cls).__new__(cls)
-            cls._client = schwabdev.Client(appKey, appSecret, callbackUrl, timeout=30)
-            linked_accounts = cls._client.linked_accounts().json()
-            cls._account_hash = linked_accounts[0].get('hashValue') # this will get the first linked account
 
-        return cls._instance
 
-    def __init__(self):
-        if not self._initialized:
-            self._initialized = True    
+    def _record_accepted_order(
+        self, response, order_id, order, symbol, quantity, action, price
+    ):
+        if response is not None and 200 <= response.status_code < 300 and order_id:
+            self._order_manager.record_order(
+                order_id, symbol, quantity, action, price, order
+            )
+
+    @staticmethod
+    def _confirm_order(order):
+        legs = ", ".join(
+            f"{leg.get('instruction', 'ORDER')} {leg.get('quantity', '')} "
+            f"{leg.get('instrument', {}).get('symbol', 'UNKNOWN')}"
+            for leg in order.get("orderLegCollection", [])
+        )
+        order_type = order.get("orderType", order.get("orderStrategyType", "ORDER"))
+        price = order.get("price", "market")
+        print(f"Order to submit: {order_type}; {legs}; price={price}")
+        return input("Submit this order? [y/N]: ").strip().casefold() in {"y", "yes"}
 
     def get_client(self):
         return self._client
@@ -194,20 +266,17 @@ class SchwabClient:
         return self._account_hash
 
     @staticmethod
-    def account_orders(status: str = None, days = 0) -> List[Dict]:
+    def account_orders(status: str = None, days_before:int  = 0) -> List[Dict]:
         """Get all orders for the Schwab account."""
         end_dt = datetime.now()
         start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        if days > 0:
-            start_dt = start_dt - timedelta(days-1)
-        response = None
-        for moreday in range(3):
-            response = SchwabClient._client.account_orders(SchwabClient._account_hash, start_dt, end_dt, None, status)  # Return all orders
-            if response != None and response.status_code >= 200 and response.status_code < 300:
-                break
-            start_dt = start_dt - timedelta(1)
+        if days_before != 0:
+            end_et = start_dt - timedelta(days_before-1)
+            start_dt = start_dt - timedelta(days_before)
+        start_dt = SchwabClient.convert_pacific_to_schwab(start_dt)
+        end_dt = SchwabClient.convert_pacific_to_schwab(end_dt)
 
-        return response
+        return SchwabClient._client.account_orders(SchwabClient._account_hash, start_dt, end_dt, None, status)  # Return all orders
     
     @staticmethod
     def get_quote(symbol: str) -> List[Dict]:
@@ -270,7 +339,7 @@ class SchwabClient:
             expiry_chain = callput_map[date_key]
             for val in expiry_chain:
                 item = expiry_chain[val][0]
-                text = f"{current_minute_str};{val};{current_price};{item['symbol']};{item['bid']};{item['ask']}"
+                text = f"{current_minute_str};{val};{current_price};{item['symbol']};{item['bid']};{item['ask']};delta={item['delta']}"
                 output.append(text)
         return output
 
@@ -541,12 +610,19 @@ class SchwabClient:
             "orderLegCollection": legs,
         }
 
+        if not self._confirm_order(order):
+            print("Order not submitted.")
+            return None, None
         response = self._client.place_order(self._account_hash, order)
         order_id = None
         if 200 <= response.status_code < 300:
             order_id = response.headers.get("location", "/").split("/")[-1]
             if order_id:
                 self._orders.append(order_id)
+                self._record_accepted_order(
+                    response, order_id, order, underlying_symbol, quantity,
+                    order_action, price
+                )
         return response, order_id
 
     def place_credit_spread_order(
@@ -678,12 +754,19 @@ class SchwabClient:
             "orderLegCollection": legs,
         }
         
+        if not self._confirm_order(order):
+            print("Order not submitted.")
+            return None, None 
         response = self._client.place_order(self._account_hash, order)
         order_id = None
         if 200 <= response.status_code < 300:
             order_id = response.headers.get("location", "/").split("/")[-1]
             if order_id:
                 self._orders.append(order_id)
+                self._record_accepted_order(
+                    response, order_id, order, underlying_symbol, quantity,
+                    "SELL", price
+                )
         return response, order_id
 
     def place_order(self, symbol: str, quantity: int,  action: str = "BUY", price: float = None, stop_price: float = None):
@@ -839,6 +922,9 @@ class SchwabClient:
             return None 
 
 
+        if not self._confirm_order(order):
+            print("Order not submitted.")
+            return None, None
         response = self._client.place_order(self._account_hash, order)  # Return the order response
         order_id = None
         if response.status_code >= 200 and response.status_code < 300:
@@ -846,13 +932,16 @@ class SchwabClient:
             order_id = response.headers.get('location', '/').split('/')[-1]
             if order_id:
                 self._orders.append(order_id)
+                self._record_accepted_order(
+                    response, order_id, order, symbol, quantity, action, price
+                )
         else:
             print(f"Failed to place order: response.status_code = {response.status_code}")
         return response, order_id
 
     @staticmethod
-    def genetate_intrday_spx_trade_report():
-        all = SchwabClient.account_orders().json()
+    def genetate_intrday_spx_trade_report(days_before: int = 0):
+        all = SchwabClient.account_orders(days_before = days_before).json()
         if all is None:
             print("failed to account_orders")
         buy_orders = []
@@ -862,7 +951,7 @@ class SchwabClient:
         remains = []
         for order in all:
 
-            if order['status'] in ['REJECTED', 'CANCELED', 'EXPIRED']:
+            if order['status'] in ['REJECTED', 'CANCELED', 'EXPIRED', 'REPLACED']:
                 continue
             if order['status'] not in  ['FILLED', 'REPLACED']:
                 print(f"ORDER STATUS not expected: {order['status']}")
@@ -916,14 +1005,41 @@ class SchwabClient:
         print(f"Total: {total:.2f}")
 
 if __name__ == "__main__":
+
+    import argparse
+
+    days_before = 0
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--days", type=int, default=None, help="Number of days")
+    args = parser.parse_args()
+
+    if args.days is not None:
+        days_before = int(args.days)
+
+    print (f"days: {days_before}")
+
     client = SchwabClient()
+    #client.get_option_chain_data_list('$SPX')
     #a = client.order_details()  # Get details of the last order placed
-    SchwabClient.genetate_intrday_spx_trade_report()
+    SchwabClient.genetate_intrday_spx_trade_report(days_before)
 
 
     #to-do:
     # trade analyze
 
+    '''
+    client.place_butterfly_order(
+        underlying_symbol = "$SPX",
+        expiration_date = None,
+        lower_strike = 7645,
+        middle_strike = 7655,
+        upper_strike = 7665,
+        quantity = 1,
+        contract_type = None,
+        price = None,
+        action = "SELL",
+    )
+    '''
 
     '''
     holdings = client.get_account_holdings()    
@@ -944,7 +1060,7 @@ if __name__ == "__main__":
     '''
     #client.get_butterfly_quote('SPX', datetime.now(), 7655, 7645, 7665)
 
-    client.get_option_chain_data_list('$SPX')
+    #client.get_option_chain_data_list('$SPX')
     '''
     client.get_butterfly_quote('$SPX', "CALL",7645, 7655, 7665) 
 

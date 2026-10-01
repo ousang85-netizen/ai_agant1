@@ -25,14 +25,18 @@ YELLOW = '\033[33m'
 RESET = '\033[0m'
 
 open_orders = []
-#order_book...
+
 
 class TradingAgent:
 
     _ta = None
+    order_book_filename = None
+    _schwabClient = None
+
     def __init__(self):
-        pass
         TradingAgent._ta = TechnicalAnalyzer()
+        TradingAgent._schwabClient = SchwabClient()
+
 
     def background_task(self, stop_event):
 
@@ -121,8 +125,8 @@ class TradingAgent:
         spx_quote_fd.close()
         print("[Background Thread] Stopped.")
    
-    def run(self):
-        print("Trading agent started")
+    def run(self, mode: int = 0):
+        print(f"Trading agent started, mode = {mode}")
 
         ## first collect stock info and save in class
 
@@ -135,34 +139,45 @@ class TradingAgent:
         print("Trading agent completed, num of ticker: " + str(len(df)))
 
         '''
+        cur = datetime.now()
+        TradingAgent.order_book_filename = f"data/order_book_{cur.strftime('%Y%m%d')}.csv"
 
+        if mode == 0:
+            # Start the background thread
+            stop_event = threading.Event()
+            t = threading.Thread(target=self.background_task, args=(stop_event,), daemon=True)
+            t.start()
 
-        # Start the background thread
-        stop_event = threading.Event()
-        t = threading.Thread(target=self.background_task, args=(stop_event,), daemon=True)
-        t.start()
+            print("Main loop started. Type 'quit' to quit.")
 
-        print("Main loop started. Type 'quit' to quit.")
+        if mode == 1:
+            self._schwabClient.start_order_monitor_thread()
 
         # Main input loop
         while True:
-            user_input = input("Enter command: ").strip()
+                user_input = input("Enter command: ").strip()
 
-            if user_input.lower() == "quit":
-                print("Exiting program...")
-                stop_event.set()  # Tell the background thread to stop
-                break
-            else:
-                print(f"You typed: {user_input}")
-                response = self.interpret_trade_command(user_input)
-                if response != None and response.status_code >= 200 and response.status_code < 300:
-                    print(f"command processes:{user_input}")
+                if user_input.lower() == "quit":
+                    print("Exiting program...")
+                    if mode == 0:
+                        stop_event.set()  # Tell the background thread to stop
+                    break
+                elif mode == 1:
+                    print(f"You typed: {user_input}")
+                    response = self.interpret_trade_command(user_input)
+                    if response != None and response.status_code >= 200 and response.status_code < 300:
+                        print(f"command processes:{user_input}")
+                else:
+                    print("Use command in other windows that running with mode = 1")
 
         # Wait for the background thread to finish cleaning up
-        t.join(timeout=30.0)
-        if t.is_alive():
-            print("Background thread refused to exit in time. Forcing shutdown...") 
+        if mode == 0:
+            t.join(timeout=30.0)
+            if t.is_alive():
+                print("Background thread refused to exit in time. Forcing shutdown...") 
 
+        if mode == 1:
+            self._schwabClient.stop_order_monitor_thread()
 
     def scan_tickers(self, exchanges=None, min_volume=1500000, min_close=5.0):
         exchanges = exchanges or ["NYSE", "NASDAQ"]
@@ -206,6 +221,7 @@ class TradingAgent:
         dictionary containing: action, quantity, symbol, and price.
         """
 
+        client = cls._schwabClient
         minutes = TradingAgent._ta.market_open_minute()
 
                     
@@ -237,7 +253,7 @@ class TradingAgent:
             # match a order command
             data = match.groupdict()
         
-            client = SchwabClient()
+            #client = SchwabClient()
             if data["action"] == "oco":
                 response, order_id = client.place_order(symbol=data['symbol'], quantity=int(data['quantity']), action="oco", price=float(data['price']), stop_price=float(data['stop_price']))
             elif data["action"] == "stop" or data["action"] == "sell" or data["action"] == "buy":
@@ -246,8 +262,10 @@ class TradingAgent:
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 ## need to add order reason for it
                 trade_reason = input("Trade reason: ").strip()
-                with open("order_book.txt", "a", encoding="utf-8 ") as file:
+                with open(TradingAgent.order_book_filename, "a", encoding="utf-8 ") as file:
                     file.write(f"{datetime.now()}: {clean_command};{order_id};[{trade_reason}]\n")
+                file.close()
+
             return response
 
         # now check for get stock info command
@@ -282,7 +300,7 @@ class TradingAgent:
                     print(f"Expiry date {data['expiry']} is in the past. Please provide a valid future date.")
                     return None
                 
-            client = SchwabClient()
+            #client = SchwabClient()
             if data["type"] == "fly":
                 v = float(data['value'])
                 client.get_butterfly_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), \
@@ -302,7 +320,7 @@ class TradingAgent:
         multileg_option_order_pattern = pattern = r"(?P<action>buy|sell)\s+(?P<strategy>fly|spread)\s+at\s+(?P<price>\d+)"
         match = re.match(multileg_option_order_pattern, clean_command)   
         if match:
-            client = SchwabClient()
+            #client = SchwabClient()
             data = match.groupdict()
             if data["strategy"] == "fly":
                 print(f"Placing a butterfly option order at {data['price']}")
@@ -337,8 +355,9 @@ class TradingAgent:
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 ## need to add order reason for it
                 trade_reason = input("Trade reason: ").strip()
-                with open("order_book.txt", "a", encoding="utf-8 ") as file:
+                with open(TradingAgent.order_book_filename, "a", encoding="utf-8 ") as file:
                     file.write(f"{datetime.now()}: {clean_command};{order_id};[{trade_reason}]\n")
+                file.close()
             return response
 
         print(f"Not yet support this command: {clean_command}")
@@ -348,16 +367,18 @@ if __name__ == "__main__":
     import sys
 
     agent = TradingAgent()
+    run_mode = 0
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
-        if cmd in {"scan", "s"}:
-            agent.scan_tickers()
-        elif cmd in {"daily", "schedule", "run-daily"}:
-            agent.update_ticker_csv()
+        if cmd in {"command", "c"}:
+            print("Running agent with console input")
+            run_mode = 1
+            agent.run(run_mode) #command input 
         else:
-            print("Unknown command. Use 'scan' or 'daily'.")
+            print("Unknown command. Use 'command' or 'c'.")
     else:
-        agent.run()
+        print("Running agent with monitoring output")
+        agent.run(run_mode)
 
         
 
