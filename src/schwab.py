@@ -112,7 +112,7 @@ class SchwabClient:
                 else:
                     leg['price'] = ((leg['quantity'] * leg['price']) + (float(execution["quantity"]) *  float(execution["price"])))\
                           / (leg['quantity'] + execution["quantity"])
-                    leg['quantify'] += float(execution["quantity"])
+                    leg['quantity'] += float(execution["quantity"])
         return legs
 
         '''
