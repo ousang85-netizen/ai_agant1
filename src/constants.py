@@ -1,0 +1,50 @@
+"""Shared configuration values for the trading application."""
+
+import os
+from datetime import time
+from zoneinfo import ZoneInfo
+
+
+
+SCHWAB_TIMEOUT_SECONDS = 30
+
+PACIFIC_TIMEZONE = ZoneInfo("America/Los_Angeles")
+NEW_YORK_TIMEZONE = ZoneInfo("America/New_York")
+UTC_TIMEZONE = ZoneInfo("UTC")
+MARKET_CLOSE_TIME = time(16, 0)
+
+SPX_SYMBOL = "$SPX"
+VIX_SYMBOL = "$VIX"
+SPXW_OPTION_PREFIX = "SPXW"
+
+OPTION_CONTRACT_MULTIPLIER = 100
+OPTION_CHAIN_STRIKE_COUNT = 100
+DEFAULT_OPTION_CHAIN_INTERVAL = 5
+DEFAULT_SPREAD_LEG_INTERVAL = 10
+DEFAULT_BUTTERFLY_LEG_INTERVAL = 10
+OPTION_PRICE_INCREMENT = 0.05
+OPTION_PRICE_SCALE = int(1 / OPTION_PRICE_INCREMENT)
+
+MIN_CREDIT_SPREAD_PRICE = 0.4
+MAX_CREDIT_SPREAD_PRICE = (DEFAULT_SPREAD_LEG_INTERVAL * 0.3)
+MAX_EQUITY_ORDER_VALUE = 10000
+TAKE_PROFIT_MULTIPLIER = 1.05
+STOP_LIMIT_MULTIPLIER = 0.98
+
+EXCLUDED_HOLDING_TICKERS = frozenset(
+    {
+        "IMCC",
+        "ATNM",
+        "524ESC100",
+        "BRCHF",
+        "BTCS",
+        "WLDS",
+        "DDDX",
+        "CBDL",
+        "BLSP",
+        "292693108",
+        "137648101",
+        "05581M503",
+        "RMHB",
+    }
+)

@@ -5,6 +5,11 @@ import pyttsx3
 import time
 from datetime import date, datetime, timedelta
 
+try:
+    from .constants import VIX_SYMBOL
+except ImportError:
+    from constants import VIX_SYMBOL
+
 from schwab import SchwabClient
 from data import get_data
 
@@ -15,7 +20,7 @@ class TechnicalAnalyzer:
                   "sndk", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
                   "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx","mrvi", "ions", "lly","ibit","rcl",
                   "afrm", "akam", "alab", "crcl", "crsp", "fsly", "gdx", "ionq", "stx", "ttmi", "avav", "cohr","p", "xbi",
-                  "inod", "qcom", "crwd", "twlo", "cost", "avgo", "jpm",
+                  "inod", "qcom", "crwd", "twlo", "cost", "avgo", "jpm","hood",
                   "xlv", "xlre", "xle", "xlp", "xlu", "cboe"]    
 
     stock_info = {}
@@ -158,7 +163,7 @@ class TechnicalAnalyzer:
             data = self._schwab_client.get_quote(symbol)
 
             if symbol == '^VIX':
-                upper_symbol = '$VIX'
+                upper_symbol = VIX_SYMBOL
             else:
                 upper_symbol = symbol.upper()
 
@@ -184,8 +189,8 @@ class TechnicalAnalyzer:
         return None
 
     def vix_elevated(self):
-            quote = self._schwab_client.get_quote("$VIX")
-            high = quote["$VIX"]['quote']['lastPrice']
+            quote = self._schwab_client.get_quote(VIX_SYMBOL)
+            high = quote[VIX_SYMBOL]['quote']['lastPrice']
             data = self.stock_info.get("^VIX", {}).get("history")
             if high-0.7 > data['Close'].iloc[-2]['^VIX']:
                 print(f"!!! VIX is elevated {data['Close'].iloc[-2]['^VIX']}!!!")

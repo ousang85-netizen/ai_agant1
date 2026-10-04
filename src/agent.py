@@ -14,6 +14,12 @@ from datetime import date, datetime, timedelta
 #pip install pyfiglet
 #import pyfiglet
 from print_chinese import print_big_chinese, print_highlight_chinese
+#from src.constants import DEFAULT_BUTTERFLY_LEG_INTERVAL
+
+try:
+    from .constants import DEFAULT_SPREAD_LEG_INTERVAL, SPX_SYMBOL, DEFAULT_BUTTERFLY_LEG_INTERVAL
+except ImportError:
+    from constants import DEFAULT_SPREAD_LEG_INTERVAL, SPX_SYMBOL, DEFAULT_BUTTERFLY_LEG_INTERVAL
 
 #import data
 from schwab import SchwabClient
@@ -109,8 +115,8 @@ class TradingAgent:
                 data_save_counter = data_save_freq
                 print("Perform data save task")
                 ## save data to csv for later analysis
-                if minutes >= 0 and minutes <= 1000:#390:
-                    item =  self._ta._schwab_client.get_option_chain_data_list('$SPX')
+                if True: #minutes >= 0 and minutes <= 1000:#390:
+                    item =  self._ta._schwab_client.get_option_chain_data_list(SPX_SYMBOL)
                     for s in item:
                         spx_quote_fd.write(s+"\n")
 
@@ -303,12 +309,13 @@ class TradingAgent:
             #client = SchwabClient()
             if data["type"] == "fly":
                 v = float(data['value'])
-                client.get_butterfly_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), \
-                                                      lower_strike=v-10, mid_strike=v, upper_strike=v+10, expiration_date=expiry_date)
+                client.get_butterfly_quote(underlying_symbol=SPX_SYMBOL, contractType=data['callput'].upper(), \
+                                                      lower_strike=v-DEFAULT_BUTTERFLY_LEG_INTERVAL, mid_strike=v, \
+                                                      upper_strike=v+DEFAULT_BUTTERFLY_LEG_INTERVAL, expiration_date=expiry_date)
                 return None 
             elif data["type"] == "spread":
                 v = float(data['value'])
-                client.get_spread_quote(underlying_symbol='$SPX', contractType=data['callput'].upper(), \
+                client.get_spread_quote(underlying_symbol=SPX_SYMBOL, contractType=data['callput'].upper(), \
                                         sell_strike=v, expiration_date=expiry_date)
                 return None
             else:
@@ -326,29 +333,34 @@ class TradingAgent:
                 print(f"Placing a butterfly option order at {data['price']}")
                 price = float(data['price'])
                 # Implement the logic to place a butterfly option order
-                response, order_id = client.place_butterfly_order(underlying_symbol = '$SPX', expiration_date = None, \
-                                                                lower_strike = price-10, middle_strike = price, upper_strike = price+10,
+                response, order_id = client.place_butterfly_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
+                                                                lower_strike = price-DEFAULT_BUTTERFLY_LEG_INTERVAL, \
+                                                                middle_strike = price, upper_strike = price+DEFAULT_BUTTERFLY_LEG_INTERVAL,
                                                                 quantity = 1, action = "BUY")
                 
     
                 if response != None and response.status_code >= 200 and response.status_code < 300:
                     print(f"Spread order placed successfully. Order ID: {order_id}")
-                else:
+                elif response != None:
                     print(f"Failed to place butterfly order. Status code: {response.status_code}, Response: {response.text}")
+                else:
+                    print(f"Failed to place butterfly order. No response received.")
 
                 # Implement the logic to place a butterfly option order
             elif data["strategy"] == "spread":
                 print(f"Placing a spread option order at {data['price']}")
                 
                 # Implement the logic to place a spread option order
-                response, order_id = client.place_credit_spread_order(underlying_symbol = '$SPX', expiration_date = None, \
+                response, order_id = client.place_credit_spread_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
                                                                 sell_strike = float(data['price']), \
-                                                                leg_interval = 5, quantity = 1)
+                                                                leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = 1)
     
                 if response != None and response.status_code >= 200 and response.status_code < 300:
                     print(f"Spread order placed successfully. Order ID: {order_id}")
-                else:
+                elif response != None:
                     print(f"Failed to place spread order. Status code: {response.status_code}, Response: {response.text}")
+                else:
+                    print(f"Failed to place spread order. No response received.")
             else:
                 print(f"Unknown strategy: {data['strategy']}. Supported strategies are 'fly' and 'spread'.")        
     
@@ -367,7 +379,7 @@ if __name__ == "__main__":
     import sys
 
     agent = TradingAgent()
-    run_mode = 0
+    run_mode = 1
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in {"command", "c"}:
@@ -381,10 +393,6 @@ if __name__ == "__main__":
         agent.run(run_mode)
 
         
-
-
-
-
 
 
 

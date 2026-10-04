@@ -7,17 +7,63 @@ import schwabdev
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
-try:
-    from .order_manager import OrderManager
-except ImportError:
-    from order_manager import OrderManager
-
-from yfinance import data
+import httpx
 
 appKey = "JaXlHdgKQCgGB4SLefipOmmtRkIhhTlQTKJAfLhjG8e7VMi4"
 appSecret = "mCtrPqOA8xlbPgf4T6PjFPUNxtNkUct3JY5ZgSpZQ4IZOnC4C3S7BmNreUPkAZ6a" 
 callbackUrl = "https://127.0.0.1"
 
+
+try:
+    from .constants import (
+        DEFAULT_BUTTERFLY_LEG_INTERVAL,
+        DEFAULT_OPTION_CHAIN_INTERVAL,
+        DEFAULT_SPREAD_LEG_INTERVAL,
+        EXCLUDED_HOLDING_TICKERS,
+        MAX_CREDIT_SPREAD_PRICE,
+        MAX_EQUITY_ORDER_VALUE,
+        MARKET_CLOSE_TIME,
+        MIN_CREDIT_SPREAD_PRICE,
+        NEW_YORK_TIMEZONE,
+        OPTION_CHAIN_STRIKE_COUNT,
+        OPTION_CONTRACT_MULTIPLIER,
+        OPTION_PRICE_SCALE,
+        PACIFIC_TIMEZONE,
+        SCHWAB_TIMEOUT_SECONDS,
+        SPX_SYMBOL,
+        SPXW_OPTION_PREFIX,
+        STOP_LIMIT_MULTIPLIER,
+        TAKE_PROFIT_MULTIPLIER,
+        UTC_TIMEZONE,
+        VIX_SYMBOL,
+    )
+    from .order_manager import OrderManager
+except ImportError:
+    from constants import (
+        DEFAULT_BUTTERFLY_LEG_INTERVAL,
+        DEFAULT_OPTION_CHAIN_INTERVAL,
+        DEFAULT_SPREAD_LEG_INTERVAL,
+        EXCLUDED_HOLDING_TICKERS,
+        MAX_CREDIT_SPREAD_PRICE,
+        MAX_EQUITY_ORDER_VALUE,
+        MARKET_CLOSE_TIME,
+        MIN_CREDIT_SPREAD_PRICE,
+        NEW_YORK_TIMEZONE,
+        OPTION_CHAIN_STRIKE_COUNT,
+        OPTION_CONTRACT_MULTIPLIER,
+        OPTION_PRICE_SCALE,
+        PACIFIC_TIMEZONE,
+        SCHWAB_TIMEOUT_SECONDS,
+        SPX_SYMBOL,
+        SPXW_OPTION_PREFIX,
+        STOP_LIMIT_MULTIPLIER,
+        TAKE_PROFIT_MULTIPLIER,
+        UTC_TIMEZONE,
+        VIX_SYMBOL,
+    )
+    from order_manager import OrderManager
+
+from yfinance import data
 
 class SchwabClient:
     _instance = None
@@ -32,7 +78,9 @@ class SchwabClient:
         if cls._instance is None:
             #cls._instance = super(SchwabClient, cls).__new__(cls)
             cls._instance = super().__new__(cls)
-            cls._client = schwabdev.Client(appKey, appSecret, callbackUrl, timeout=30)
+            cls._client = schwabdev.Client(
+                appKey, appSecret,  callbackUrl, timeout=SCHWAB_TIMEOUT_SECONDS,
+            )
             linked_accounts = cls._client.linked_accounts().json()
             cls._account_hash = linked_accounts[0].get('hashValue') # this will get the first linked account
 
@@ -52,14 +100,14 @@ class SchwabClient:
     def convert_pacific_to_schwab(date_str: str) -> tuple[str, int]:
 
         #. Attach the Pacific timezone (handles PST/PDT transitions automatically)
-        pacific_aware = date_str.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        pacific_aware = date_str.replace(tzinfo=PACIFIC_TIMEZONE)
         
-        return pacific_aware.astimezone(ZoneInfo("UTC"))
+        return pacific_aware.astimezone(UTC_TIMEZONE)
 
     @staticmethod
     def ToPacificTime(schwab_time:str):
         utc_dt_rest = datetime.fromisoformat(schwab_time.replace("Z", "+00:00")) 
-        pacific_dt_rest = utc_dt_rest.astimezone(ZoneInfo("America/Los_Angeles"))
+        pacific_dt_rest = utc_dt_rest.astimezone(PACIFIC_TIMEZONE)
 
         return pacific_dt_rest.strftime("%Y-%m-%d %H:%M:%S %Z")
 
@@ -210,13 +258,10 @@ class SchwabClient:
         """Return a list of positions for a specific Schwab account."""
         stocks = []
         options = []
-        exclused_ticker= ['IMCC','ATNM','524ESC100', 'BRCHF', 'BTCS', 'WLDS', 'DDDX', 'CBDL', 
-                'BLSP', '292693108', '137648101', '05581M503', 'RMHB']
- 
         positions = self._client.account_details(self._account_hash, fields="positions").json()
         
         for position in  positions["securitiesAccount"]["positions"]:
-            if position['instrument']['symbol'] not in exclused_ticker:
+            if position['instrument']['symbol'] not in EXCLUDED_HOLDING_TICKERS:
         
                 temp = {}
 
@@ -247,7 +292,7 @@ class SchwabClient:
     def _confirm_order(order):
         legs = ", ".join(
             f"{leg.get('instruction', 'ORDER')} {leg.get('quantity', '')} "
-            f"{leg.get('instrument', {}).get('symbol', 'UNKNOWN')}"
+            f"{OrderManager.convert_option_ticker(leg.get('instrument', {}).get('symbol', 'UNKNOWN'))}"
             for leg in order.get("orderLegCollection", [])
         )
         order_type = order.get("orderType", order.get("orderStrategyType", "ORDER"))
@@ -282,9 +327,26 @@ class SchwabClient:
     def get_quote(symbol: str) -> List[Dict]:
         """Get quotes for the specified symbols."""
         if symbol == '^VIX':
-            return SchwabClient._client.quote(symbol_id='$VIX').json()
+            updated_symbol = VIX_SYMBOL
+        else:
+            updated_symbol = symbol
 
-        return SchwabClient._client.quote(symbol_id=symbol).json()
+        #return SchwabClient._client.quote(symbol_id=updated_symbol).json()
+
+        try:
+            # Make the quote request
+            response = SchwabClient._client.quote(symbol_id=updated_symbol)
+            
+            # Check if the response was successful before parsing JSON
+            if response.status_code != 200:
+                print(f"Error status code received when getting quote for {updated_symbol}: {response.status_code}")
+
+        except httpx.HTTPStatusError as e:
+            print(f"HTTP error occurred when getting quote for {updated_symbol}: {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            print(f"An unexpected error occurred when getting quote for {updated_symbol}: {e}")
+
+        return response.json() if response.status_code == 200 else None
 
     def order_details(self):
         """Get details of the last order placed."""
@@ -311,8 +373,8 @@ class SchwabClient:
         for contractType in ["CALL", "PUT"]:
             response =  SchwabClient._client.option_chains( 
                     symbol=symbol, contractType = contractType,
-                    strikeCount=100,  # Broad strike buffer to ensure all 3 legs are included
-                    interval = 5,
+                    strikeCount=OPTION_CHAIN_STRIKE_COUNT,  # Broad strike buffer to ensure all 3 legs are included
+                    interval=DEFAULT_OPTION_CHAIN_INTERVAL,
                     daysToExpiration = 0,
                     strategy="SINGLE"
                 )
@@ -344,7 +406,8 @@ class SchwabClient:
         return output
 
 
-    def get_butterfly_quote(self, underlying_symbol, contractType, lower_strike, mid_strike, upper_strike, expiration_date=None, chain_interval=5, leg_interval=10):
+    def get_butterfly_quote(self, underlying_symbol, contractType, lower_strike, mid_strike, upper_strike, expiration_date=None, \
+                            chain_interval=DEFAULT_OPTION_CHAIN_INTERVAL, leg_interval=DEFAULT_BUTTERFLY_LEG_INTERVAL):
         """
         Calculates the aggregate quote for a Call Butterfly Spread using schwabdev.
         Structure: Long 1 Lower, Short 2 Mid, Long 1 Upper
@@ -354,7 +417,7 @@ class SchwabClient:
             response =  SchwabClient._client.option_chains(
                 symbol=underlying_symbol,
                 contractType=contractType,
-                strikeCount=100,  # Broad strike buffer to ensure all 3 legs are included
+                strikeCount=OPTION_CHAIN_STRIKE_COUNT,  # Broad strike buffer to ensure all 3 legs are included
                 interval = chain_interval,
                 daysToExpiration = 0,
                 strategy="SINGLE"
@@ -363,7 +426,7 @@ class SchwabClient:
             response =  SchwabClient._client.option_chains(
                 symbol=underlying_symbol,
                 contractType=contractType,
-                strikeCount=100,  # Broad strike buffer to ensure all 3 legs are included
+                strikeCount=OPTION_CHAIN_STRIKE_COUNT,  # Broad strike buffer to ensure all 3 legs are included
                 interval = chain_interval,
                 fromDate=expiration_date.strftime("%Y-%m-%d"),
                 toDate=expiration_date.strftime("%Y-%m-%d"),
@@ -393,7 +456,11 @@ class SchwabClient:
             raise ValueError(f"No option chain data found for expiration {expiration_date.strftime('%Y-%m-%d')}")
             
         expiry_chain = callput_map[date_key]
-        
+
+        if lower_strike is None:
+            lower_strike = mid_strike - leg_interval
+        if upper_strike is None:
+            upper_strike = mid_strike + leg_interval
         # 2. Isolate the specific legs
         try:
             # Schwab API uses string representation of floats for strike mapping (e.g., "150.0")
@@ -409,14 +476,17 @@ class SchwabClient:
         butterfly_bid = leg_lower['bid'] + leg_upper['bid'] - (2 * leg_mid['ask'])
         butterfly_ask = leg_lower['ask'] + leg_upper['ask'] - (2 * leg_mid['bid'])
         butterfly_mid = (butterfly_bid + butterfly_ask) / 2
-        max_loss =  butterfly_mid * 100 
-        max_profit = (float(mid_strike) - float(lower_strike)) * 100 - butterfly_mid * 100  # Max profit occurs if the underlying is at mid_strike at expiration
+        max_loss = butterfly_mid * OPTION_CONTRACT_MULTIPLIER
+        max_profit = (
+            (float(mid_strike) - float(lower_strike)) * OPTION_CONTRACT_MULTIPLIER
+            - butterfly_mid * OPTION_CONTRACT_MULTIPLIER
+        )  # Max profit occurs if the underlying is at mid_strike at expiration
         print(f"--- {underlying_symbol} Call Butterfly ({lower_strike}/{mid_strike}/{upper_strike}) ---")
         if expiration_date:
             print(f"Expiration: {expiration_date.strftime('%Y-%m-%d')}")
-        print(f"Leg 1 ({lower_strike} C) Ask: ${leg_lower['ask']} | Bid: ${leg_lower['bid']}")
-        print(f"Leg 2 ({mid_strike} C x2) Ask: ${leg_mid['ask']} | Bid: ${leg_mid['bid']}")
-        print(f"Leg 3 ({upper_strike} C) Ask: ${leg_upper['ask']} | Bid: ${leg_upper['bid']}")
+        print(f"Leg 1 ({lower_strike} C) Ask: ${leg_lower['ask']} | Bid: ${leg_lower['bid']} | Delta: {leg_lower['delta']}")
+        print(f"Leg 2 ({mid_strike} C x2) Ask: ${leg_mid['ask']} | Bid: ${leg_mid['bid']} | Delta: {leg_mid['delta']}")
+        print(f"Leg 3 ({upper_strike} C) Ask: ${leg_upper['ask']} | Bid: ${leg_upper['bid']} | Delta: {leg_upper['delta']}")
         print("--------------------------------------------------")
         print(f"butterfly Net Bid:   ${butterfly_bid:.2f}")
         print(f"butterfly Net Ask:   ${butterfly_ask:.2f}")
@@ -425,7 +495,7 @@ class SchwabClient:
         return {"butterfly_mid": butterfly_mid, "max_loss": max_loss, "max_profit": max_profit,
                 "leg_lower": leg_lower, "leg_mid": leg_mid, "leg_upper": leg_upper}
 
-    def get_spread_quote(self, underlying_symbol, contractType, sell_strike, buy_strike = None, expiration_date=None, chain_interval=5, leg_interval=5):
+    def get_spread_quote(self, underlying_symbol, contractType, sell_strike, buy_strike=None, expiration_date=None, chain_interval=DEFAULT_OPTION_CHAIN_INTERVAL, leg_interval=DEFAULT_SPREAD_LEG_INTERVAL):
         """
         Calculates the aggregate quote for a Call Butterfly Spread using schwabdev.
         Structure: Long 1 Lower, Short 2 Mid, Long 1 Upper
@@ -435,7 +505,7 @@ class SchwabClient:
             response =  SchwabClient._client.option_chains(
                 symbol=underlying_symbol,
                 contractType=contractType,
-                strikeCount=100,  # Broad strike buffer to ensure all 3 legs are included
+                strikeCount=OPTION_CHAIN_STRIKE_COUNT,  # Broad strike buffer to ensure all 3 legs are included
                 interval = chain_interval,
                 daysToExpiration = 0,
                 strategy="SINGLE"
@@ -444,7 +514,7 @@ class SchwabClient:
             response =  SchwabClient._client.option_chains(
                 symbol=underlying_symbol,
                 contractType=contractType,
-                strikeCount=100,  # Broad strike buffer to ensure all 3 legs are included
+                strikeCount=OPTION_CHAIN_STRIKE_COUNT,  # Broad strike buffer to ensure all 3 legs are included
                 interval = chain_interval,
                 fromDate=expiration_date.strftime("%Y-%m-%d"),
                 toDate=expiration_date.strftime("%Y-%m-%d"),
@@ -503,16 +573,19 @@ class SchwabClient:
         spread_bid = leg_sell['bid'] - leg_buy['ask']
         spread_ask = leg_sell['ask'] - leg_buy['bid']
         spread_mid = (spread_bid + spread_ask) / 2
-        max_loss = (abs(float(buy_strike) - float(sell_strike)) - spread_mid) * 100  # Max loss occurs if the underlying is at or below sell_strike at expiration
-        max_profit = spread_mid * 100 # Max profit occurs if the underlying is at or above buy_strike at expiration
+        max_loss = (
+            abs(float(buy_strike) - float(sell_strike)) - spread_mid
+        ) * OPTION_CONTRACT_MULTIPLIER  # Max loss occurs if the underlying is at or below sell_strike at expiration
+        max_profit = spread_mid * OPTION_CONTRACT_MULTIPLIER  # Max profit occurs if the underlying is at or above buy_strike at expiration
 
         print(f"--- {underlying_symbol} Call Spread ({sell_strike}/{buy_strike}) ---")
         if expiration_date:
             print(f"Expiration: {expiration_date.strftime('%Y-%m-%d')}")
         else:
             print("Expiration: Nearest available")
-        print(f"Leg sell ({sell_strike} C) Ask: ${leg_sell['ask']} | Bid: ${leg_sell['bid']}")
-        print(f"Leg buy ({buy_strike} C) Ask: ${leg_buy['ask']} | Bid: ${leg_buy['bid']}")
+        C_or_P = "C" if contractType.upper() == "CALL" else "P"
+        print(f"Leg sell ({sell_strike} {C_or_P}) Ask: ${leg_sell['ask']} | Bid: ${leg_sell['bid']} | Delta: {leg_sell['delta']}")
+        print(f"Leg buy ({buy_strike} {C_or_P}) Ask: ${leg_buy['ask']} | Bid: ${leg_buy['bid']} | Delta: {leg_buy['delta']}")
         print("--------------------------------------------------")
         print(f"Spread Net Bid:   ${spread_bid:.2f}")
         print(f"Spread Net Ask:   ${spread_ask:.2f}")
@@ -569,12 +642,20 @@ class SchwabClient:
         if order_action not in {"BUY", "SELL"}:
             raise ValueError("action must be 'BUY' or 'SELL'")
 
-        fly_quote = self.get_butterfly_quote(underlying_symbol, contract_type, lower_strike, middle_strike, upper_strike,expiration_date=None, leg_interval=10)
+        fly_quote = self.get_butterfly_quote(
+            underlying_symbol,
+            contract_type,
+            lower_strike,
+            middle_strike,
+            upper_strike,
+            expiration_date=None,
+            leg_interval=DEFAULT_BUTTERFLY_LEG_INTERVAL,
+        )
 
-        if (not fly_quote['leg_lower']['symbol'].startswith('SPXW')) or \
-           (not fly_quote['leg_mid']['symbol'].startswith('SPXW')) or \
-           (not fly_quote['leg_upper']['symbol'].startswith('SPXW')) :
-            if underlying_symbol == '$SPX':
+        if (not fly_quote['leg_lower']['symbol'].startswith(SPXW_OPTION_PREFIX)) or \
+           (not fly_quote['leg_mid']['symbol'].startswith(SPXW_OPTION_PREFIX)) or \
+           (not fly_quote['leg_upper']['symbol'].startswith(SPXW_OPTION_PREFIX)) :
+            if underlying_symbol == SPX_SYMBOL:
                 raise ValueError("spx option symbol {fly_quote['leg_lower']['symbol']} is not right")
             
         instructions = (
@@ -599,7 +680,7 @@ class SchwabClient:
             )
         ]
         price = fly_quote['butterfly_mid']
-        price = round(price*20)/20  # round to nearest 0.05
+        price = round(price * OPTION_PRICE_SCALE) / OPTION_PRICE_SCALE
         order = {
             "orderType": "NET_DEBIT " if order_action == "BUY" else "NET_CREDIT",
             "session": "NORMAL",
@@ -655,9 +736,9 @@ class SchwabClient:
             raise ValueError("quantity must be positive")
 
         if expiration_date is None:
-            market_now = datetime.now(ZoneInfo("America/New_York"))
+            market_now = datetime.now(NEW_YORK_TIMEZONE)
             expiration_date = market_now.date()
-            if market_now.weekday() >= 5 or market_now.time() >= time(16, 0):
+            if market_now.weekday() >= 5 or market_now.time() >= MARKET_CLOSE_TIME:
                 expiration_date += timedelta(days=1)
                 while expiration_date.weekday() >= 5:
                     expiration_date += timedelta(days=1)
@@ -678,23 +759,39 @@ class SchwabClient:
             option_type = "CALL"
 
         # get option chain to verify that the strikes exist
-        option_quote = self.get_spread_quote(underlying_symbol, option_type, sell_strike, buy_strike, \
-                                             expiration_date=expiration_date, chain_interval=5, leg_interval=leg_interval)
+        option_quote = self.get_spread_quote(
+            underlying_symbol,
+            option_type,
+            sell_strike,
+            buy_strike,
+            expiration_date=expiration_date,
+            chain_interval=DEFAULT_OPTION_CHAIN_INTERVAL,
+            leg_interval=leg_interval,
+        )
  
         #return {"spread_mid": spread_mid, "max_loss": max_loss, "max_profit": max_profit,
         #        "leg_nearer": leg_nearer, "leg_farther": leg_farther}
         price = option_quote['spread_mid']
         if price <= 0:
             raise ValueError("Spread mid price must be positive for a credit spread")
-        if (not option_quote['leg_sell']['symbol'].startswith('SPXW')) or \
-           (not option_quote['leg_buy']['symbol'].startswith('SPXW')):
-            if underlying_symbol == '$SPX':
+        if (not option_quote['leg_sell']['symbol'].startswith(SPXW_OPTION_PREFIX)) or \
+           (not option_quote['leg_buy']['symbol'].startswith(SPXW_OPTION_PREFIX)):
+            if underlying_symbol == SPX_SYMBOL:
                 raise ValueError("spx option symbol {option_quote['leg_sell']['symbol']} is not right")
             
-        price = round(price*20)/20  # round to nearest 0.05
-        if price > 1.5:
-            print("credit spread irce ({price}) is over current limit of 1.5")
-            return None
+        price = round(price * OPTION_PRICE_SCALE) / OPTION_PRICE_SCALE
+        if price > MAX_CREDIT_SPREAD_PRICE:
+            print(
+                f"credit spread price ({price}) is over current limit of "
+                f"{MAX_CREDIT_SPREAD_PRICE}"
+            )
+            return None, None
+        if price < MIN_CREDIT_SPREAD_PRICE:
+            print(
+                f"credit spread price ({price}) is below current limit of "
+                f"{MIN_CREDIT_SPREAD_PRICE}"
+            )
+            return None, None
         legs = [
             {
                 "instruction": instruction,
@@ -710,6 +807,20 @@ class SchwabClient:
             )
         ]
         '''
+        opposite_legs = [
+            {
+                "instruction": instruction,
+                "quantity": str(quantity),
+                "instrument": {
+                    "symbol": option_symbol,
+                    "assetType": "OPTION",
+                },
+            }
+            for instruction, option_symbol in (
+                ("BUY_TO_CLOSE", option_quote['leg_sell']['symbol']),
+                ("SELL_TO_CLOSE", option_quote['leg_buy']['symbol']),
+            )
+        ]
         order = {
             "orderType": "NET_CREDIT",
             "session": "NORMAL",
@@ -720,30 +831,35 @@ class SchwabClient:
             "orderLegCollection": legs,
             "childOrderStrategies": [
                 {
+                "orderStrategyType": "OCO",
+
+                "childOrderStrategies": [
+                    {
+                    "orderStrategyType": "SINGLE",
+                    "orderType": "NET_DEBIT",
+                    "session": "NORMAL",
+                    "duration": "DAY",
+                    "complexOrderStrategyType": "VERTICAL",
+                    "price": f"{(price+2.):.2f}",
+                    "orderLegCollection": opposite_legs,
+                    },
+
+                    {
+                    "orderStrategyType": "SINGLE",
                     "orderType": "STOP",
                     "session": "NORMAL",
                     "duration": "DAY",
-                    "orderStrategyType": "SINGLE",
                     "complexOrderStrategyType": "VERTICAL",
-                    "price": f"{price+0.6:.2f}",
-                    "stopPrice": f"{price+0.8:.2f}",
-                    "orderLegCollection": [
-                        {
-                            "instruction": "BUY_TO_CLOSE",
-                            "quantity": str(quantity),
-                            "instrument": legs[0]["instrument"],
-                        },
-                        {
-                            "instruction": "SELL_TO_CLOSE",
-                            "quantity": str(quantity),
-                            "instrument": legs[1]["instrument"],
-                        },
-                    ],
+                    #"price": f"{(price+0.8):.2f}",
+                    "stopPrice": f"{(price+0.8):.2f}",
+                    "orderLegCollection": opposite_legs,
+                    }
+                ]        
                 }
-            ],
+            ]
         }
         '''
-
+        
         order = {
             "orderType": "NET_CREDIT",
             "session": "NORMAL",
@@ -772,14 +888,17 @@ class SchwabClient:
     def place_order(self, symbol: str, quantity: int,  action: str = "BUY", price: float = None, stop_price: float = None):
         """Compose an order for a specific Schwab account."""
 
-        """Limit the total money spend on this order to 10000"""
-        if price * quantity > 10000:
-            print(f"Order exceeds $10000 limit: {price * quantity}")
+        """Limit the total money spent on this order to the configured value."""
+        if price * quantity > MAX_EQUITY_ORDER_VALUE:
+            print(
+                f"Order exceeds ${MAX_EQUITY_ORDER_VALUE} limit: "
+                f"{price * quantity}"
+            )
             return None
 
         if action == "buy":
-            sell_limit = "{:.2f}".format(price * 1.05)  # Set sell limit to 5% above the buy price;
-            stop_limit = "{:.2f}".format(price * 0.98);  # Set stop limit to 2% below the buy price;
+            sell_limit = "{:.2f}".format(price * TAKE_PROFIT_MULTIPLIER)
+            stop_limit = "{:.2f}".format(price * STOP_LIMIT_MULTIPLIER)
             buy_order = {
                 "orderType": "LIMIT",
                 "session": "NORMAL",
@@ -957,8 +1076,8 @@ class SchwabClient:
                 print(f"ORDER STATUS not expected: {order['status']}")
             if 'orderLegCollection' in order:
                 symbol = order['orderLegCollection'][0]['instrument']['symbol']
-                if not symbol.startswith('SPXW'):
-                    print(f"{symbol} is not start with SPXW!!")
+                if not symbol.startswith(SPXW_OPTION_PREFIX):
+                    print(f"{symbol} is not start with {SPXW_OPTION_PREFIX}!!")
                     continue
                 if order['orderLegCollection'][0]['instruction'].startswith('BUY'):
                     buy_orders.append(order)
@@ -1019,7 +1138,7 @@ if __name__ == "__main__":
     print (f"days: {days_before}")
 
     client = SchwabClient()
-    #client.get_option_chain_data_list('$SPX')
+    client.get_option_chain_data_list(SPX_SYMBOL)
     #a = client.order_details()  # Get details of the last order placed
     SchwabClient.genetate_intrday_spx_trade_report(days_before)
 
@@ -1029,7 +1148,7 @@ if __name__ == "__main__":
 
     '''
     client.place_butterfly_order(
-        underlying_symbol = "$SPX",
+        underlying_symbol = SPX_SYMBOL,
         expiration_date = None,
         lower_strike = 7645,
         middle_strike = 7655,
@@ -1060,12 +1179,12 @@ if __name__ == "__main__":
     '''
     #client.get_butterfly_quote('SPX', datetime.now(), 7655, 7645, 7665)
 
-    #client.get_option_chain_data_list('$SPX')
+    #client.get_option_chain_data_list(SPX_SYMBOL)
     '''
-    client.get_butterfly_quote('$SPX', "CALL",7645, 7655, 7665) 
+    client.get_butterfly_quote(SPX_SYMBOL, "CALL", 7645, 7655, 7665)
 
     client.place_butterfly_order(
-        underlying_symbol = "$SPX",
+        underlying_symbol = SPX_SYMBOL,
         expiration_date = None,
         lower_strike = 7645,
         middle_strike = 7655,
@@ -1077,8 +1196,16 @@ if __name__ == "__main__":
     )
     '''
     '''
-    client.get_spread_quote('$SPX', "CALL", 7670, None, expiration_date=None, leginterval=5)
-    response, order_id = client.place_credit_spread_order(underlying_symbol = '$SPX', expiration_date = None, \
-                                                sell_strike = 7610, \
-                                                leg_interval = 5, quantity = 1)
+    client.get_spread_quote(
+        SPX_SYMBOL,
+        "CALL",
+        7670,
+        None,
+        expiration_date=None,
+        leg_interval=DEFAULT_SPREAD_LEG_INTERVAL,
+    )
     '''
+    #response, order_id = client.place_credit_spread_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
+    #                                            sell_strike = 7620, \
+    #                                            leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = 1)
+    
