@@ -366,7 +366,7 @@ class SchwabClient:
             current_price = float(quote[symbol]["quote"]["lastPrice"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
-                f"Could not read last price for {underlying_symbol}"
+                f"Could not read last price for {symbol}"
             ) from error
         current_minute_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 

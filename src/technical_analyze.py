@@ -161,7 +161,9 @@ class TechnicalAnalyzer:
         doji_list = []
         for symbol in self.stock_list:
             data = self._schwab_client.get_quote(symbol)
-
+            if data is None or symbol.upper() not in data:
+                print(f"Failed to get quote for {symbol}, skipping analysis.")
+                continue
             if symbol == '^VIX':
                 upper_symbol = VIX_SYMBOL
             else:
@@ -194,6 +196,9 @@ class TechnicalAnalyzer:
 
     def vix_elevated(self):
             quote = self._schwab_client.get_quote(VIX_SYMBOL)
+            if quote is None:
+                print("Failed to get quote, skipping analysis.")
+                return None
             high = quote[VIX_SYMBOL]['quote']['lastPrice']
             data = self.stock_info.get("^VIX", {}).get("history")
             if high-0.7 > data['Close'].iloc[-2]['^VIX']:
@@ -208,6 +213,9 @@ class TechnicalAnalyzer:
             if symbol.startswith("^"):
                 continue
             quote = self._schwab_client.get_quote(symbol)
+            if quote is None or symbol.upper() not in quote:
+                print(f"Failed to get quote for {symbol}, skipping analysis.")
+                continue
             atr = self.stock_info.get(symbol, {}).get("atr").iloc[-1]
             ema10_val = self.stock_info.get(symbol, {}).get("ema10").iloc[-1][symbol.upper()]
             ema20_val = self.stock_info.get(symbol, {}).get("ema20").iloc[-1][symbol.upper()]

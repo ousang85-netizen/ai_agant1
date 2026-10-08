@@ -46,6 +46,9 @@ class MyListProcessor:
             if symbol.startswith("^"):
                 continue
             quote = self._tech_analyzer._schwab_client.get_quote(symbol)
+            if quote is None or symbol.upper() not in quote:
+                print(RED + f"Failed to get quote for {symbol}, skipping analysis." + RESET)
+                continue
             atr = self._tech_analyzer.stock_info.get(symbol, {}).get("atr").iloc[-1]
             cur_price =  quote[symbol.upper()]['quote']['lastPrice']
             ema50_val = self._tech_analyzer.stock_info.get(symbol, {}).get("ema50").iloc[-1][symbol.upper()] 
@@ -76,6 +79,9 @@ class MyListProcessor:
             cost = row['cost']
             target = row['target']
             quote = self._tech_analyzer._schwab_client.get_quote(symbol)
+            if quote is None or symbol.upper() not in quote:
+                print(RED + f"Failed to get quote for {symbol}, skipping analysis." + RESET)
+                continue
             last_price =  quote[symbol.upper()]['quote']['lastPrice'] 
             atr = self._tech_analyzer.stock_info.get(symbol, {}).get("atr").iloc[-1]
             need_sell  = False
