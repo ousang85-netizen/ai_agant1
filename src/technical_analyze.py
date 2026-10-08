@@ -14,8 +14,8 @@ from schwab import SchwabClient
 from data import get_data
 
 class TechnicalAnalyzer:
-
-    stock_list = ["^VIX", "spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", "aehr",
+    # "^VIX",
+    stock_list = ["spy", "qqq", "smh", "lrcx", "glw", "dram", "aaoi", "amzn", "orcl", "now", "strl", "aehr",
                   "nvda", "amd", "tsla", "aapl", "msft", "googl", "meta", "intc", "simo", "mu", "arm",
                   "sndk", "amd", "mrvl", "dell", "net", "skhy", "be", "wdc", "secz", "ceg","f", "ibm", "slv", "fcx",
                   "pfe", "mrna", "twst", "brkr", "ilmn", "ibb", "arkg", "labu", "tem", "ntra", "bntx","mrvi", "ions", "lly","ibit","rcl",
@@ -100,7 +100,7 @@ class TechnicalAnalyzer:
 
         text_to_speech = pyttsx3.init()
         text_to_speech.setProperty('rate', 150)
-        text_to_speech.setProperty('volume', 0.05)
+        text_to_speech.setProperty('volume', 0.01)
 
         text_to_speech.say(text)
 
@@ -166,6 +166,10 @@ class TechnicalAnalyzer:
                 upper_symbol = VIX_SYMBOL
             else:
                 upper_symbol = symbol.upper()
+
+            if upper_symbol is None:
+                print("In show_doji, upper_symbol is None.")
+                continue
 
             high = data[upper_symbol]['quote']['highPrice']
             low = data[upper_symbol]['quote']['lowPrice']

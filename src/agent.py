@@ -17,9 +17,9 @@ from print_chinese import print_big_chinese, print_highlight_chinese
 #from src.constants import DEFAULT_BUTTERFLY_LEG_INTERVAL
 
 try:
-    from .constants import DEFAULT_SPREAD_LEG_INTERVAL, SPX_SYMBOL, DEFAULT_BUTTERFLY_LEG_INTERVAL
+    from .constants import DEFAULT_SPREAD_LEG_INTERVAL, SPX_SYMBOL, DEFAULT_BUTTERFLY_LEG_INTERVAL, DEFAULT_SPREAD_QUANTITY
 except ImportError:
-    from constants import DEFAULT_SPREAD_LEG_INTERVAL, SPX_SYMBOL, DEFAULT_BUTTERFLY_LEG_INTERVAL
+    from constants import DEFAULT_SPREAD_LEG_INTERVAL, SPX_SYMBOL, DEFAULT_BUTTERFLY_LEG_INTERVAL, DEFAULT_SPREAD_QUANTITY
 
 #import data
 from schwab import SchwabClient
@@ -83,8 +83,8 @@ class TradingAgent:
             print("-" * 20 + " checking doji " + "-" * 20)
             self._ta.show_doji()
             ## Vix
-            print("-" * 20 + " checking vix spike " + "-" * 20)
-            self._ta.vix_elevated()
+            #print("-" * 20 + " checking vix spike " + "-" * 20)
+            #self._ta.vix_elevated()
 
             ## check moving average
             print("-" * 20 + " checking if nearing ema " + "-" * 20)
@@ -108,6 +108,8 @@ class TradingAgent:
                 ## check reverse signal: 
                 # 5ema break 10 ema, etc
                 # candle stick show reverse signal after a long drop, etc
+                #scan stock reach 100 day high, and let AI to analyse if the company has a foundamental reason to support , 
+                #    and if the stock is a good buy  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             scan_freq_counter -= 1
 
                 
@@ -353,7 +355,7 @@ class TradingAgent:
                 # Implement the logic to place a spread option order
                 response, order_id = client.place_credit_spread_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
                                                                 sell_strike = float(data['price']), \
-                                                                leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = 1)
+                                                                leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = DEFAULT_SPREAD_QUANTITY)
     
                 if response != None and response.status_code >= 200 and response.status_code < 300:
                     print(f"Spread order placed successfully. Order ID: {order_id}")
@@ -372,6 +374,19 @@ class TradingAgent:
                 file.close()
             return response
 
+        #bc at 7710
+        #bp at 7800
+        option_order_pattern = r"(?P<action>bc|bp)\s+at\s+(?P<price>\d+)"
+        match = re.match(option_order_pattern, clean_command)
+        if match:
+            data = match.groupdict()
+            if data["action"] == "bc":
+                print(f"Placing a naked call order at {data['price']}")
+                price = float(data['price'])
+                #response, order_id = client.place_single_leg_order(underlying_symbol = SPX_SYMBOL, expiration_date = None,
+                #                                                lower_strike = price-DEFAULT_BUTTERFLY_LEG_INTERVAL,        
+                #                                middle_strike = price, upper_strike = price+DEFAULT_BUTTERFLY_LEG_INTERVAL,
+
         print(f"Not yet support this command: {clean_command}")
         return None 
 
@@ -379,7 +394,7 @@ if __name__ == "__main__":
     import sys
 
     agent = TradingAgent()
-    run_mode = 1
+    run_mode = 0
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in {"command", "c"}:

@@ -87,3 +87,5 @@ def collect_all_exchange_tickers(
     return results
 
 
+#foverview.set_filter(signal="New High")   ## 52w high
+#df_new_highs = foverview.ScreenerView()

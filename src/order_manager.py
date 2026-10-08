@@ -210,11 +210,14 @@ class OrderManager:
             with self._lock:
                 orders = list(self._orders.values())
             if orders:
+                filename = self.status_check_file_name
+                with open(filename, "a", newline="", encoding="utf-8") as file:
+                    file.write(f"{datetime.now()}\n")                 
                 for record in orders:
                     if self._stop_event.is_set():
                         break
                     self._check_order(record)
-                filename = self.status_check_file_name            
+           
                 with open(filename, "a", newline="", encoding="utf-8") as file:
                     file.write("-" * 30 + "\n")
             self._stop_event.wait(self._poll_interval)
