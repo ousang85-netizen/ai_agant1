@@ -869,7 +869,7 @@ class SchwabClient:
             "price": f"{price:.2f}",
             "orderLegCollection": legs,
         }
-        
+
         if not self._confirm_order(order):
             print("Order not submitted.")
             return None, None 
