@@ -2,6 +2,7 @@
 
 # This file has been cleared as requested. Fill in trading logic here.
 
+from asyncio import tasks
 import threading
 from typing import Dict, Any, List
 from xmlrpc import client
@@ -11,6 +12,8 @@ import time
 import os
 import re
 from datetime import date, datetime, timedelta
+import asyncio
+
 #pip install pyfiglet
 #import pyfiglet
 from print_chinese import print_big_chinese, print_highlight_chinese
@@ -38,26 +41,72 @@ class TradingAgent:
     _ta = None
     order_book_filename = None
     _schwabClient = None
+    _shutdown_event = asyncio.Event()
 
     def __init__(self):
         TradingAgent._ta = TechnicalAnalyzer()
         TradingAgent._schwabClient = SchwabClient()
+        TradingAgent._shutdown_event = asyncio.Event()
 
 
-    def background_task(self, stop_event):
-
-        list_processor = MyListProcessor()
-        loop_period_sec = 200
-        scan_freq = 3
-        data_save_freq = 1
-        scan_freq_counter = 0
-        data_save_counter = 0
-        stop_event.wait(timeout=2.0)
+    async def data_collection_task(self, task_id, sleep_time):
         cur = datetime.now()
         spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
         spx_quote_fd = open(spx_quote_filename, "a", encoding="utf-8")
+        print("Perform data save task")
+        while not self._shutdown_event.is_set():
+            minutes = TradingAgent._ta.market_open_minute()
+            ## save data to csv for later analysis
+            print(f"[{task_id}] Market open minute: {minutes}")
+            if minutes >= 0 and minutes <= 420:
+                item =  self._ta._schwab_client.get_option_chain_data_list(SPX_SYMBOL)
+                for s in item:
+                    spx_quote_fd.write(s+"\n")
 
-        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
+            except asyncio.TimeoutError:
+                continue
+
+        spx_quote_fd.close()
+        print(f"Data Collection Task {task_id} cleaning up and exiting.")
+
+    async def user_input_listener(self):
+        while not self._shutdown_event.is_set():
+            # asyncio.to_thread keeps the blocking input() from freezing the event loop
+            user_command = await asyncio.to_thread(input, "Enter command (type 'quit' to exit): \n")
+            
+            if user_command.strip().lower() == 'quit':
+                print("Quit command received. Triggering shutdown...")
+                self._shutdown_event.set()
+                break
+            else:
+                print(f"Executed custom command: {user_command}")
+
+    async def monitor_tasks(self):
+        tasks = [
+            asyncio.create_task(self.data_collection_task("dataCollection", 60.0)),
+            asyncio.create_task(self.background_task("background", 200.0)),
+            # to-do: need to add a scan task.
+            asyncio.create_task(self.user_input_listener()),
+        ]
+
+        try:
+            # Keep running until the shutdown event is triggered externally
+            await self._shutdown_event.wait()
+        finally:
+            print("\nShutting down: Signal sent to all tasks...")
+            # 5. Tell all tasks to break out of their loops
+            self._shutdown_event.set()
+            
+            # 6. Wait for all tasks to finish their cleanup blocks naturally
+            await asyncio.gather(*tasks)
+
+    async def background_task(self, task_id, sleep_time=200):
+
+        list_processor = MyListProcessor()
+
+        while not self._shutdown_event.is_set():
             #pint("\n[Background Thread] Working...")
             # Wait for 3 seconds, but check often if we need to stop
             minutes = TradingAgent._ta.market_open_minute()
@@ -68,11 +117,6 @@ class TradingAgent:
 
             if minutes < 0:
                 print("Remember analyst SPY/QQQ, even stock at buy price, Indexes need to support to buy, stay away if Index intraday is downtrend")
-
-            if minutes >= -1 and minutes < 5:
-                loop_period_sec = 30
-            else:
-                loop_period_sec = 200
 
             if minutes > 25 and minutes < 40:
                  self._ta.speak("Check for any chance to buy strong stock during price dip in the morning")
@@ -103,40 +147,14 @@ class TradingAgent:
             ## process wait_list.csv
             print("-" * 20 + " checking stocks reach to buy level " + "-" * 20)
             list_processor.process_wait_list()
+            
+            try:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
+            except asyncio.TimeoutError:
+                continue
 
-
-            ## scan for big pool
-            if scan_freq_counter == 0:
-                scan_freq_counter = scan_freq_counter
-                print("Perform scan task")
-                ## check buy signal: macd crossover below 0; marvini;  reach support ema; 
-                ## check reverse signal: 
-                # 5ema break 10 ema, etc
-                # candle stick show reverse signal after a long drop, etc
-                #scan stock reach 100 day high, and let AI to analyse if the company has a foundamental reason to support , 
-                #    and if the stock is a good buy  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            scan_freq_counter -= 1
-
-                
-            if data_save_counter == 0:
-                data_save_counter = data_save_freq
-                print("Perform data save task")
-                ## save data to csv for later analysis
-                if minutes >= 0 and minutes <= 420:
-                    item =  self._ta._schwab_client.get_option_chain_data_list(SPX_SYMBOL)
-                    for s in item:
-                        spx_quote_fd.write(s+"\n")
-
-                data_save_counter= data_save_freq
-            data_save_counter -= 1
-           
-            print(f"\n[Background Thread] Cycle complete. Waiting for next interval...")
-            was_signaled = stop_event.wait(timeout=loop_period_sec)
-            if was_signaled:
-                break
-
-        spx_quote_fd.close()
-        print("[Background Thread] Stopped.")
+        await asyncio.sleep(0.1) # Simulate file/connection closure
+        print(f"Task {task_id} safely terminated.")
    
     def run(self, mode: int = 0):
         print(f"Trading agent started, mode = {mode}")
@@ -155,13 +173,7 @@ class TradingAgent:
         cur = datetime.now()
         TradingAgent.order_book_filename = f"data/order_book_{cur.strftime('%Y%m%d')}.csv"
 
-        if mode == 0:
-            # Start the background thread
-            stop_event = threading.Event()
-            t = threading.Thread(target=self.background_task, args=(stop_event,), daemon=True)
-            t.start()
-
-            print("Main loop started. Type 'quit' to quit.")
+        print("Main loop started. Type 'quit' to quit.")
 
         if mode == 1:
             self._schwabClient.start_order_monitor_thread()
@@ -173,7 +185,7 @@ class TradingAgent:
                 if user_input.lower() == "quit":
                     print("Exiting program...")
                     if mode == 0:
-                        stop_event.set()  # Tell the background thread to stop
+                        self._shutdown_event.set()  # Tell the background thread to stop
                     break
                 elif mode == 1:
                     print(f"You typed: {user_input}")
@@ -183,14 +195,7 @@ class TradingAgent:
                 else:
                     print("Use command in other windows that running with mode = 1")
 
-        # Wait for the background thread to finish cleaning up
-        if mode == 0:
-            t.join(timeout=30.0)
-            if t.is_alive():
-                print("Background thread refused to exit in time. Forcing shutdown...") 
-
-        if mode == 1:
-            self._schwabClient.stop_order_monitor_thread()
+        self._schwabClient.stop_order_monitor_thread()
 
     def scan_tickers(self, exchanges=None, min_volume=1500000, min_close=5.0):
         exchanges = exchanges or ["NYSE", "NASDAQ"]
@@ -410,7 +415,12 @@ if __name__ == "__main__":
             print("Unknown command. Use 'command' or 'c'.")
     else:
         print("Running agent with monitoring output")
-        agent.run(run_mode)
+        try:
+            asyncio.run(agent.monitor_tasks())
+        except KeyboardInterrupt:
+            print("\nProgram interrupted by user. Initiating event shutdown.")
+            # Triggering the event manually on Ctrl+C if main() gets interrupted
+            #agent._shutdown_event.set()
 
         
 
