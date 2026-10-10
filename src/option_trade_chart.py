@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 import pandas as pd
-
+from datetime import date, datetime, timedelta
 
 class OptionTradeChart:
     """Calculate and plot estimated P/L from a semicolon-delimited quote file."""
@@ -37,6 +37,13 @@ class OptionTradeChart:
             raise ValueError(f"Quote file contains invalid rows: {self.quote_file}")
         self.quotes = quotes.sort_values("timestamp").reset_index(drop=True)
 
+    def add_one_minute(self, timestamp: Union[str, pd.Timestamp]) -> pd.Timestamp:
+        """Return a timestamp one minute later than the input."""
+        ts = pd.Timestamp(timestamp)
+        if ts.second != 0 or ts.microsecond != 0:
+            raise ValueError("timestamp must be at the start of a minute")
+        return ts + timedelta(minutes=1)
+    
     def calculate_profit_loss(
         self,
         order: Dict[str, Any],
@@ -60,11 +67,11 @@ class OptionTradeChart:
         for leg in legs:
             instruction = str(leg.get("instruction", "")).upper()
             if instruction.startswith("BUY"):
-                direction = 1
+                direction = -1
                 fill_side = "ask"
                 mark_side = "bid"
             elif instruction.startswith("SELL"):
-                direction = -1
+                direction = 1
                 fill_side = "bid"
                 mark_side = "ask"
             else:
@@ -79,7 +86,13 @@ class OptionTradeChart:
                 raise ValueError("each option leg must have a symbol and positive quantity")
 
             contract_quotes = self.quotes[self.quotes["symbol"] == symbol]
-            entry_quotes = contract_quotes[contract_quotes["timestamp"] <= entry_timestamp]
+            for try_5_times in range(5):
+                entry_quotes = contract_quotes[contract_quotes["timestamp"] <= entry_timestamp]
+                if not entry_quotes.empty:
+                    break
+                entry_timestamp = self.add_one_minute(entry_timestamp)
+            #entry_quotes = contract_quotes[contract_quotes["timestamp"] <= entry_timestamp]
+
             if entry_quotes.empty:
                 raise ValueError(f"No quote for {symbol} at or before {entry_timestamp}")
             entry_quote = entry_quotes.iloc[-1]
@@ -89,9 +102,9 @@ class OptionTradeChart:
                     "quantity": quantity,
                     "direction": direction,
                     "fill_price": float(entry_quote[fill_side]),
-                    "mark_side": mark_side,
-                    "entry_mark": float(entry_quote[mark_side]),
-                    "quotes": contract_quotes.set_index("timestamp")[mark_side],
+                    #"mark_side": mark_side,
+                    #"entry_mark": float(entry_quote[mark_side]),
+                    "quotes": contract_quotes.set_index("timestamp")[fill_side].sort_index(),
                 }
             )
 
@@ -101,13 +114,13 @@ class OptionTradeChart:
         timestamps = pd.DatetimeIndex([entry_timestamp]).union(pd.DatetimeIndex(quote_times)).sort_values()
         profit_loss = pd.Series(0.0, index=timestamps)
         for leg in parsed_legs:
-            marks = leg["quotes"].groupby(level=0).last().reindex(timestamps).ffill()
-            marks.loc[entry_timestamp] = leg["entry_mark"]
-            marks = marks.sort_index().ffill()
+            fills = leg["quotes"].groupby(level=0).last().reindex(timestamps).ffill()
+            fills.loc[entry_timestamp] = leg["fill_price"]
+            fills = fills.sort_index().ffill()
             profit_loss += (
                 leg["direction"]
                 * leg["quantity"]
-                * (marks - leg["fill_price"])
+                * fills
                 * multiplier
             )
 
@@ -151,4 +164,37 @@ class OptionTradeChart:
         figure.tight_layout()
         if output_file is not None:
             figure.savefig(output_file)
+        plt.show()
         return figure, axis
+
+
+if __name__ == "__main__":
+    cur = datetime.now()
+    #also defined in agent.py, but this is for testing the OptionTradeChart class independently
+    #spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
+    spx_quote_filename = "data/spx_quote_20261009.csv"
+    chart = OptionTradeChart(spx_quote_filename)
+
+    legs = [
+        {
+            "instruction": instruction,
+            "quantity": "1",
+            "instrument": {
+                "symbol": option_symbol,
+                "assetType": "OPTION",
+            },
+        }
+        for instruction, option_symbol in (
+            ("SELL_TO_OPEN", "SPXW  261009C07830000",),
+            ("BUY_TO_OPEN", "SPXW  261009C07840000",),
+        )
+    ]
+    order = {
+        "orderLegCollection": legs
+    }
+
+    
+    chart.plot_trade(
+        order=order,
+        entry_time="2026-10-09 06:32",
+    )

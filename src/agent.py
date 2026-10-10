@@ -69,6 +69,11 @@ class TradingAgent:
             if minutes < 0:
                 print("Remember analyst SPY/QQQ, even stock at buy price, Indexes need to support to buy, stay away if Index intraday is downtrend")
 
+            if minutes >= -1 and minutes < 5:
+                loop_period_sec = 30
+            else:
+                loop_period_sec = 200
+
             if minutes > 25 and minutes < 40:
                  self._ta.speak("Check for any chance to buy strong stock during price dip in the morning")
 

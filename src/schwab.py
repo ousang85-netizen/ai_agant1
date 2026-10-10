@@ -346,7 +346,7 @@ class SchwabClient:
         except Exception as e:
             print(f"An unexpected error occurred when getting quote for {updated_symbol}: {e}")
 
-        return response.json() if response.status_code == 200 else None
+        return response.json() if response and response.status_code == 200 else None
 
     def order_details(self):
         """Get details of the last order placed."""

@@ -320,7 +320,7 @@ class OrderManager:
         total_current_value = 0.0
         for execution in executions:
             quote_data = self._broker.get_quote(execution["symbol"])
-            if quote is None or symbol.upper() not in quote:
+            if quote_data is None:
                 print(f"Failed to get quote for {execution['symbol']}, skipping analysis.")
                 continue
             quote = quote_data[execution["symbol"]]["quote"]
