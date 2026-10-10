@@ -147,7 +147,7 @@ class TradingAgent:
             ## process wait_list.csv
             print("-" * 20 + " checking stocks reach to buy level " + "-" * 20)
             list_processor.process_wait_list()
-            
+
             try:
                 await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
             except asyncio.TimeoutError:

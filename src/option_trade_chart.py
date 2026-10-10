@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional, Union
 import pandas as pd
 from datetime import date, datetime, timedelta
 
+from constants import OPTION_PRICE_SCALE, OPTION_PRICE_INCREMENT
+
 class OptionTradeChart:
     """Calculate and plot estimated P/L from a semicolon-delimited quote file."""
 
@@ -52,10 +54,14 @@ class OptionTradeChart:
     ) -> pd.DataFrame:
         """Return estimated position P/L at each saved quote time from entry onward.
 
-        ``order`` uses Schwab's ``orderLegCollection`` shape. Opening buys are
-        assumed filled at ask and opening sells at bid; open positions are marked
-        at bid when long and ask when short. Fees and slippage are not included.
+        ``order`` uses Schwab's ``orderLegCollection`` shape. Entry and mark prices
+        use the rounded bid/ask midpoint. Fees and slippage are not included.
         """
+        def calc_price(quote):
+            price = (quote["bid"] + quote["ask"]) / 2
+            price = round(price * OPTION_PRICE_SCALE) / OPTION_PRICE_SCALE
+            return price * multiplier
+        
         if multiplier <= 0:
             raise ValueError("multiplier must be positive")
         legs = order.get("orderLegCollection", [])
@@ -64,16 +70,16 @@ class OptionTradeChart:
 
         entry_timestamp = pd.Timestamp(entry_time)
         parsed_legs = []
+        cost = 0.0
         for leg in legs:
             instruction = str(leg.get("instruction", "")).upper()
+            # this is used at opposite side when close the position
             if instruction.startswith("BUY"):
+                direction = 1
+            elif instruction.startswith("SELL"):
                 direction = -1
                 fill_side = "ask"
                 mark_side = "bid"
-            elif instruction.startswith("SELL"):
-                direction = 1
-                fill_side = "bid"
-                mark_side = "ask"
             else:
                 raise ValueError(f"Unsupported option instruction: {instruction}")
 
@@ -96,15 +102,16 @@ class OptionTradeChart:
             if entry_quotes.empty:
                 raise ValueError(f"No quote for {symbol} at or before {entry_timestamp}")
             entry_quote = entry_quotes.iloc[-1]
+            cost += direction * quantity * calc_price(entry_quote) 
             parsed_legs.append(
                 {
                     "symbol": symbol,
                     "quantity": quantity,
                     "direction": direction,
-                    "fill_price": float(entry_quote[fill_side]),
-                    #"mark_side": mark_side,
-                    #"entry_mark": float(entry_quote[mark_side]),
-                    "quotes": contract_quotes.set_index("timestamp")[fill_side].sort_index(),
+                    "fill_price": calc_price(entry_quote),
+                    "quotes": contract_quotes.set_index("timestamp").apply(
+                        calc_price, axis=1
+                    ).sort_index(),
                 }
             )
 
@@ -112,7 +119,7 @@ class OptionTradeChart:
             self.quotes["timestamp"] >= entry_timestamp, "timestamp"
         ].drop_duplicates()
         timestamps = pd.DatetimeIndex([entry_timestamp]).union(pd.DatetimeIndex(quote_times)).sort_values()
-        profit_loss = pd.Series(0.0, index=timestamps)
+        profit_loss = pd.Series(-cost, index=timestamps)
         for leg in parsed_legs:
             fills = leg["quotes"].groupby(level=0).last().reindex(timestamps).ffill()
             fills.loc[entry_timestamp] = leg["fill_price"]
@@ -121,7 +128,6 @@ class OptionTradeChart:
                 leg["direction"]
                 * leg["quantity"]
                 * fills
-                * multiplier
             )
 
         return pd.DataFrame({"profit_loss": profit_loss}, index=timestamps).rename_axis("timestamp")
@@ -178,15 +184,15 @@ if __name__ == "__main__":
     legs = [
         {
             "instruction": instruction,
-            "quantity": "1",
+            "quantity": quantity,
             "instrument": {
                 "symbol": option_symbol,
                 "assetType": "OPTION",
             },
         }
-        for instruction, option_symbol in (
-            ("SELL_TO_OPEN", "SPXW  261009C07830000",),
-            ("BUY_TO_OPEN", "SPXW  261009C07840000",),
+        for instruction, quantity, option_symbol in (
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07840000"),
+            ("SELL_TO_OPEN", "1", "SPXW  261009C07830000"),
         )
     ]
     order = {
@@ -196,5 +202,5 @@ if __name__ == "__main__":
     
     chart.plot_trade(
         order=order,
-        entry_time="2026-10-09 06:32",
+        entry_time="2026-10-09 06:35:27",
     )
