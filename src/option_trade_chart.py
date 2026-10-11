@@ -1,12 +1,16 @@
 """Replay an option order against saved intraday quote snapshots."""
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+import time
+from typing import Any, Dict, Optional, Sequence, Union
 
 import pandas as pd
 from datetime import date, datetime, timedelta
 
-from constants import OPTION_PRICE_SCALE, OPTION_PRICE_INCREMENT
+try:
+    from .constants import OPTION_PRICE_SCALE, OPTION_PRICE_INCREMENT
+except ImportError:
+    from constants import OPTION_PRICE_SCALE, OPTION_PRICE_INCREMENT
 
 class OptionTradeChart:
     """Calculate and plot estimated P/L from a semicolon-delimited quote file."""
@@ -130,19 +134,53 @@ class OptionTradeChart:
                 * fills
             )
 
-        return pd.DataFrame({"profit_loss": profit_loss}, index=timestamps).rename_axis("timestamp")
+        history = pd.DataFrame(
+            {"profit_loss": profit_loss}, index=timestamps
+        ).rename_axis("timestamp")
+        history.attrs["net_entry_cost"] = cost
+        return history
 
     def plot_trade(
         self,
-        order: Dict[str, Any],
-        entry_time: Union[str, pd.Timestamp],
+        order: Union[Dict[str, Any], Sequence[Dict[str, Any]]],
+        entry_time: Union[
+            str,
+            pd.Timestamp,
+            Sequence[Union[str, pd.Timestamp]],
+        ],
         output_file: Optional[Union[str, Path]] = None,
         multiplier: int = 100,
     ):
-        """Plot estimated intraday P/L and optionally save the figure."""
+        """Plot one trade or the combined P/L of several trades.
+
+        When ``order`` is a sequence, ``entry_time`` can be one timestamp shared
+        by all orders or a matching sequence of timestamps.
+        """
         import matplotlib.pyplot as plt
 
-        history = self.calculate_profit_loss(order, entry_time, multiplier=multiplier)
+        orders = [order] if isinstance(order, dict) else list(order)
+        if not orders or any(not isinstance(trade_order, dict) for trade_order in orders):
+            raise ValueError("order must be an order dictionary or a non-empty sequence of orders")
+
+        if isinstance(entry_time, (str, pd.Timestamp)):
+            entry_times = [entry_time] * len(orders)
+        else:
+            entry_times = list(entry_time)
+            if len(entry_times) != len(orders):
+                raise ValueError("entry_time sequence must contain one timestamp per order")
+
+        trade_histories = [
+            self.calculate_profit_loss(
+                trade_order, trade_entry_time, multiplier=multiplier
+            )
+            for trade_order, trade_entry_time in zip(orders, entry_times)
+        ]
+        histories = [trade_history["profit_loss"] for trade_history in trade_histories]
+        net_entry_cost = sum(
+            trade_history.attrs["net_entry_cost"] for trade_history in trade_histories
+        )
+        combined_pnl = pd.concat(histories, axis=1).sort_index().ffill().fillna(0).sum(axis=1)
+        history = combined_pnl.to_frame(name="profit_loss")
         figure, axis = plt.subplots(figsize=(12, 6))
         axis.plot(history.index, history["profit_loss"], color="#176b5b", linewidth=2)
         axis.axhline(0, color="#555555", linewidth=1, linestyle="--")
@@ -163,6 +201,18 @@ class OptionTradeChart:
             alpha=0.2,
         )
         axis.set_title("Estimated Option Trade P/L")
+        if net_entry_cost >= 0:
+            cost_label = f"Net entry debit: ${net_entry_cost:,.2f}"
+        else:
+            cost_label = f"Net entry credit: ${-net_entry_cost:,.2f}"
+        axis.text(
+            0.02,
+            0.98,
+            cost_label,
+            transform=axis.transAxes,
+            verticalalignment="top",
+            bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "#cccccc"},
+        )
         axis.set_xlabel("Time")
         axis.set_ylabel("Profit / Loss ($)")
         axis.grid(True, alpha=0.25)
@@ -180,7 +230,7 @@ if __name__ == "__main__":
     #spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
     spx_quote_filename = "data/spx_quote_20261009.csv"
     chart = OptionTradeChart(spx_quote_filename)
-
+    #trade 1
     legs = [
         {
             "instruction": instruction,
@@ -191,16 +241,58 @@ if __name__ == "__main__":
             },
         }
         for instruction, quantity, option_symbol in (
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07840000"),
-            ("SELL_TO_OPEN", "1", "SPXW  261009C07830000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07805000"),
+            ("SELL_TO_OPEN", "2", "SPXW  261009C07810000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07815000"),
         )
     ]
     order = {
         "orderLegCollection": legs
     }
+    # trade 2
+    legs2 = [
+        {
+            "instruction": instruction,
+            "quantity": quantity,
+            "instrument": {
+                "symbol": option_symbol,
+                "assetType": "OPTION",
+            },
+        }
+        for instruction, quantity, option_symbol in (
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07795000"),
+            ("SELL_TO_OPEN", "2", "SPXW  261009C07800000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07805000"),
+        )
+    ]
+    order2 = {
+        "orderLegCollection": legs2
+    }
+    # trade 3
+    legs3 = [
+        {
+            "instruction": instruction,
+            "quantity": quantity,
+            "instrument": {
+                "symbol": option_symbol,
+                "assetType": "OPTION",
+            },
+        }
+        for instruction, quantity, option_symbol in (
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07785000"),
+            ("SELL_TO_OPEN", "2", "SPXW  261009C07790000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07795000"),
+        )
+    ]
+    order3 = {
+        "orderLegCollection": legs3
+    }
+
 
     
     chart.plot_trade(
-        order=order,
-        entry_time="2026-10-09 06:35:27",
+        #order=[order, order2],
+        #entry_time=["2026-10-09 06:35:27", "2026-10-09 06:35:27"],
+        order=[order, order2, order3],
+        entry_time=["2026-10-09 06:35:27", "2026-10-09 06:35:27", "2026-10-09 06:35:27"],
     )
