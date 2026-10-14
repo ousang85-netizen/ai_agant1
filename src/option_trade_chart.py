@@ -227,8 +227,8 @@ class OptionTradeChart:
 if __name__ == "__main__":
     cur = datetime.now()
     #also defined in agent.py, but this is for testing the OptionTradeChart class independently
-    #spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
-    spx_quote_filename = "data/spx_quote_20261009.csv"
+    spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
+    #spx_quote_filename = "data/spx_quote_20261009.csv"
     chart = OptionTradeChart(spx_quote_filename)
     #trade 1
     legs = [
@@ -241,9 +241,9 @@ if __name__ == "__main__":
             },
         }
         for instruction, quantity, option_symbol in (
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07805000"),
-            ("SELL_TO_OPEN", "2", "SPXW  261009C07810000"),
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07815000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261013C07780000"),
+            ("SELL_TO_OPEN", "2", "SPXW  261013C07800000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261013C07820000"),
         )
     ]
     order = {
@@ -260,14 +260,14 @@ if __name__ == "__main__":
             },
         }
         for instruction, quantity, option_symbol in (
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07795000"),
-            ("SELL_TO_OPEN", "2", "SPXW  261009C07800000"),
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07805000"),
+            ("SELL_TO_OPEN", "1",  "SPXW  261009P07760000"),
+            ("BUY_TO_OPEN", "1",    "SPXW  261009P07750000"),
         )
     ]
     order2 = {
         "orderLegCollection": legs2
     }
+    
     # trade 3
     legs3 = [
         {
@@ -280,19 +280,19 @@ if __name__ == "__main__":
         }
         for instruction, quantity, option_symbol in (
             ("BUY_TO_OPEN", "1",  "SPXW  261009C07785000"),
-            ("SELL_TO_OPEN", "2", "SPXW  261009C07790000"),
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07795000"),
+            ("SELL_TO_OPEN", "2", "SPXW  261009C07800000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261009C07815000"),
         )
     ]
     order3 = {
         "orderLegCollection": legs3
     }
-
+    
 
     
     chart.plot_trade(
         #order=[order, order2],
-        #entry_time=["2026-10-09 06:35:27", "2026-10-09 06:35:27"],
-        order=[order, order2, order3],
-        entry_time=["2026-10-09 06:35:27", "2026-10-09 06:35:27", "2026-10-09 06:35:27"],
+        #entry_time=["2026-10-09 06:45:27", "2026-10-09 06:45:27"],
+        order=[order],  
+        entry_time=["2026-10-13 06:33"],
     )

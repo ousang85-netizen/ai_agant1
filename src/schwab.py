@@ -481,12 +481,14 @@ class SchwabClient:
             (float(mid_strike) - float(lower_strike)) * OPTION_CONTRACT_MULTIPLIER
             - butterfly_mid * OPTION_CONTRACT_MULTIPLIER
         )  # Max profit occurs if the underlying is at mid_strike at expiration
+
+        C_or_P = "C" if contractType.upper() == "CALL" else "P"
         print(f"--- {underlying_symbol} Call Butterfly ({lower_strike}/{mid_strike}/{upper_strike}) ---")
         if expiration_date:
             print(f"Expiration: {expiration_date.strftime('%Y-%m-%d')}")
-        print(f"Leg 1 ({lower_strike} C) Ask: ${leg_lower['ask']} | Bid: ${leg_lower['bid']} | Delta: {leg_lower['delta']}")
-        print(f"Leg 2 ({mid_strike} C x2) Ask: ${leg_mid['ask']} | Bid: ${leg_mid['bid']} | Delta: {leg_mid['delta']}")
-        print(f"Leg 3 ({upper_strike} C) Ask: ${leg_upper['ask']} | Bid: ${leg_upper['bid']} | Delta: {leg_upper['delta']}")
+        print(f"Leg 1 ({lower_strike} {C_or_P}) Ask: ${leg_lower['ask']} | Bid: ${leg_lower['bid']} | Delta: {leg_lower['delta']}")
+        print(f"Leg 2 ({mid_strike} {C_or_P} x2) Ask: ${leg_mid['ask']} | Bid: ${leg_mid['bid']} | Delta: {leg_mid['delta']}")
+        print(f"Leg 3 ({upper_strike} {C_or_P}) Ask: ${leg_upper['ask']} | Bid: ${leg_upper['bid']} | Delta: {leg_upper['delta']}")
         print("--------------------------------------------------")
         print(f"butterfly Net Bid:   ${butterfly_bid:.2f}")
         print(f"butterfly Net Ask:   ${butterfly_ask:.2f}")

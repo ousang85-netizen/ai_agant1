@@ -336,18 +336,25 @@ class TradingAgent:
 
         #buy fly at 7590
         #buy spread at 7590
-        multileg_option_order_pattern = pattern = r"(?P<action>buy|sell)\s+(?P<strategy>fly|spread)\s+at\s+(?P<price>\d+)"
+        #buy fly15 at 7590   (butterfly wth leg distance 15)
+        multileg_option_order_pattern = pattern = r"(?P<action>buy|sell)\s+(?P<strategy>fly|spread|fly15)\s+at\s+(?P<price>\d+)"
         match = re.match(multileg_option_order_pattern, clean_command)   
         if match:
             #client = SchwabClient()
             data = match.groupdict()
-            if data["strategy"] == "fly":
-                print(f"Placing a butterfly option order at {data['price']}")
+            if data["strategy"] == "fly" or data["strategy"] == "fly15":
+                if data["strategy"] == "fly15":
+                    print("Using butterfly leg interval of 15 for this order.")
+                    leg_interval = 15
+                else:
+                    leg_interval = DEFAULT_BUTTERFLY_LEG_INTERVAL
+
+                print(f"Placing a butterfly option order at {data['price']}, leg interval: {leg_interval}")
                 price = float(data['price'])
                 # Implement the logic to place a butterfly option order
                 response, order_id = client.place_butterfly_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
-                                                                lower_strike = price-DEFAULT_BUTTERFLY_LEG_INTERVAL, \
-                                                                middle_strike = price, upper_strike = price+DEFAULT_BUTTERFLY_LEG_INTERVAL,
+                                                                lower_strike = price-leg_interval, \
+                                                                middle_strike = price, upper_strike = price+leg_interval,
                                                                 quantity = 1, action = "BUY")
                 
     
@@ -410,9 +417,12 @@ if __name__ == "__main__":
         if cmd in {"command", "c"}:
             print("Running agent with console input")
             run_mode = 1
-            agent.run(run_mode) #command input 
         else:
             print("Unknown command. Use 'command' or 'c'.")
+
+    if run_mode == 1:
+        print("Running agent with console input")
+        agent.run(run_mode) #command input
     else:
         print("Running agent with monitoring output")
         try:

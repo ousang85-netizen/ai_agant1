@@ -100,7 +100,7 @@ class TechnicalAnalyzer:
 
         text_to_speech = pyttsx3.init()
         text_to_speech.setProperty('rate', 150)
-        text_to_speech.setProperty('volume', 0.01)
+        text_to_speech.setProperty('volume', 0.005)
 
         text_to_speech.say(text)
 
