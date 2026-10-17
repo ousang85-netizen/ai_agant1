@@ -228,7 +228,7 @@ if __name__ == "__main__":
     cur = datetime.now()
     #also defined in agent.py, but this is for testing the OptionTradeChart class independently
     spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
-    #spx_quote_filename = "data/spx_quote_20261009.csv"
+    #spx_quote_filename = "data/spx_quote_20261015.csv"
     chart = OptionTradeChart(spx_quote_filename)
     #trade 1
     legs = [
@@ -241,9 +241,9 @@ if __name__ == "__main__":
             },
         }
         for instruction, quantity, option_symbol in (
-            ("BUY_TO_OPEN", "1",  "SPXW  261013C07780000"),
-            ("SELL_TO_OPEN", "2", "SPXW  261013C07800000"),
-            ("BUY_TO_OPEN", "1",  "SPXW  261013C07820000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261016C07760000"),                                    
+            ("SELL_TO_OPEN", "2", "SPXW  261016C07750000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261016C07740000"),
         )
     ]
     order = {
@@ -258,10 +258,10 @@ if __name__ == "__main__":
                 "symbol": option_symbol,
                 "assetType": "OPTION",
             },
-        }
+        }   
         for instruction, quantity, option_symbol in (
-            ("SELL_TO_OPEN", "1",  "SPXW  261009P07760000"),
-            ("BUY_TO_OPEN", "1",    "SPXW  261009P07750000"),
+            ("BUY_TO_OPEN", "1",  "SPXW  261016C07750000"),
+            ("SELL_TO_OPEN", "1", "SPXW  261016C07740000"),
         )
     ]
     order2 = {
@@ -292,7 +292,7 @@ if __name__ == "__main__":
     
     chart.plot_trade(
         #order=[order, order2],
-        #entry_time=["2026-10-09 06:45:27", "2026-10-09 06:45:27"],
+        #entry_time=["2026-10-16 06:32", "2026-10-16 06:50"],
         order=[order],  
-        entry_time=["2026-10-13 06:33"],
+        entry_time=["2026-10-16 06:32"],
     )

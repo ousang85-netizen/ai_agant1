@@ -337,51 +337,53 @@ class TradingAgent:
         #buy fly at 7590
         #buy spread at 7590
         #buy fly15 at 7590   (butterfly wth leg distance 15)
-        multileg_option_order_pattern = pattern = r"(?P<action>buy|sell)\s+(?P<strategy>fly|spread|fly15)\s+at\s+(?P<price>\d+)"
+        multileg_option_order_pattern = pattern = r"(?P<action>buy|sell|close)\s+(?P<strategy>fly|spread|fly15)\s+at\s+(?P<price>\d+)"
         match = re.match(multileg_option_order_pattern, clean_command)   
         if match:
             #client = SchwabClient()
             data = match.groupdict()
             if data["strategy"] == "fly" or data["strategy"] == "fly15":
                 if data["strategy"] == "fly15":
-                    print("Using butterfly leg interval of 15 for this order.")
-                    leg_interval = 15
+                    print("You are not ready to do butterly with leg interval of 15.")
+                    #leg_interval = 15
+                    return None
                 else:
                     leg_interval = DEFAULT_BUTTERFLY_LEG_INTERVAL
 
-                print(f"Placing a butterfly option order at {data['price']}, leg interval: {leg_interval}")
+                print(f"Placing a {data['action']} {data['strategy']} option order at {data['price']}, leg interval: {leg_interval}")
                 price = float(data['price'])
                 # Implement the logic to place a butterfly option order
                 response, order_id = client.place_butterfly_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
                                                                 lower_strike = price-leg_interval, \
                                                                 middle_strike = price, upper_strike = price+leg_interval,
-                                                                quantity = 1, action = "BUY")
+                                                                quantity = 1, action = data['action'].upper())
                 
     
                 if response != None and response.status_code >= 200 and response.status_code < 300:
-                    print(f"Spread order placed successfully. Order ID: {order_id}")
+                    print(f"{datetime.now()}: Spread order placed successfully. Order ID: {order_id}")
                 elif response != None:
-                    print(f"Failed to place butterfly order. Status code: {response.status_code}, Response: {response.text}")
+                    print(f"{datetime.now()}: Failed to place butterfly order. Status code: {response.status_code}, Response: {response.text}")
                 else:
-                    print(f"Failed to place butterfly order. No response received.")
+                    print(f"{datetime.now()}: Failed to place butterfly order. No response received.")
 
                 # Implement the logic to place a butterfly option order
             elif data["strategy"] == "spread":
-                print(f"Placing a spread option order at {data['price']}")
+                print(f"Placing a {data["action"]} spread option order at {data['price']}")
                 
                 # Implement the logic to place a spread option order
                 response, order_id = client.place_credit_spread_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
                                                                 sell_strike = float(data['price']), \
-                                                                leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = DEFAULT_SPREAD_QUANTITY)
+                                                                leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = DEFAULT_SPREAD_QUANTITY,
+                                                                action = data['action'].upper())
     
                 if response != None and response.status_code >= 200 and response.status_code < 300:
-                    print(f"Spread order placed successfully. Order ID: {order_id}")
+                    print(f"{datetime.now()}: Spread order placed successfully. Order ID: {order_id}")
                 elif response != None:
-                    print(f"Failed to place spread order. Status code: {response.status_code}, Response: {response.text}")
+                    print(f"{datetime.now()}: Failed to place spread order. Status code: {response.status_code}, Response: {response.text}")
                 else:
-                    print(f"Failed to place spread order. No response received.")
+                    print(f"{datetime.now()}: Failed to place spread order. No response received.")
             else:
-                print(f"Unknown strategy: {data['strategy']}. Supported strategies are 'fly' and 'spread'.")        
+                print(f"{datetime.now()}: Unknown strategy: {data['strategy']}. Supported strategies are 'fly' and 'spread'.")        
     
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 ## need to add order reason for it
@@ -411,7 +413,7 @@ if __name__ == "__main__":
     import sys
 
     agent = TradingAgent()
-    run_mode = 0
+    run_mode = 1
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in {"command", "c"}:

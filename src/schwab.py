@@ -715,6 +715,7 @@ class SchwabClient:
         sell_strike: float,
         leg_interval: float,
         quantity: int = 1,
+        action = "BUY",
         #price: float = None,
     ):
         """Place a limit order to open a call or put credit spread.
@@ -728,6 +729,8 @@ class SchwabClient:
         call spread using ``sell_strike`` and ``buy_strike``.
         ``price`` is the net credit per share.
         """
+        if action not in {"BUY"}:
+            raise ValueError("action must be 'BUY' ,  'CLOSE' not yet supported")
         if expiration_date is not None and not isinstance(expiration_date, date):
             raise TypeError("expiration_date must be a datetime.date")
         if sell_strike <= 0:
@@ -782,32 +785,54 @@ class SchwabClient:
                 raise ValueError("spx option symbol {option_quote['leg_sell']['symbol']} is not right")
             
         price = round(price * OPTION_PRICE_SCALE) / OPTION_PRICE_SCALE
-        if price > MAX_CREDIT_SPREAD_PRICE:
-            print(
-                f"credit spread price ({price}) is over current limit of "
-                f"{MAX_CREDIT_SPREAD_PRICE}"
-            )
-            return None, None
-        if price < MIN_CREDIT_SPREAD_PRICE:
-            print(
-                f"credit spread price ({price}) is below current limit of "
-                f"{MIN_CREDIT_SPREAD_PRICE}"
-            )
-            return None, None
-        legs = [
-            {
-                "instruction": instruction,
-                "quantity": str(quantity),
-                "instrument": {
-                    "symbol": option_symbol,
-                    "assetType": "OPTION",
-                },
-            }
-            for instruction, option_symbol in (
-                ("SELL_TO_OPEN", option_quote['leg_sell']['symbol']),
-                ("BUY_TO_OPEN", option_quote['leg_buy']['symbol']),
-            )
-        ]
+        if action == "BUY":
+            order_type = "NET_CREDIT"
+            if price > MAX_CREDIT_SPREAD_PRICE:
+                print(
+                    f"credit spread price ({price}) is over current limit of "
+                    f"{MAX_CREDIT_SPREAD_PRICE}"
+                )
+                return None, None
+            if price < MIN_CREDIT_SPREAD_PRICE:
+                print(
+                    f"credit spread price ({price}) is below current limit of "
+                    f"{MIN_CREDIT_SPREAD_PRICE}"
+                )
+                return None, None
+            legs = [
+                {
+                    "instruction": instruction,
+                    "quantity": str(quantity),
+                    "instrument": {
+                        "symbol": option_symbol,
+                        "assetType": "OPTION",
+                    },
+                }
+                for instruction, option_symbol in (
+                    ("SELL_TO_OPEN", option_quote['leg_sell']['symbol']),
+                    ("BUY_TO_OPEN", option_quote['leg_buy']['symbol']),
+                )
+            ]
+        elif action == "CLOSE":
+            order_type = "NET_DEBIT"
+            price += 0.1  # add 10 penny to the price to ensure the order is filled
+            legs = [
+                {
+                    "instruction": instruction,
+                    "quantity": str(quantity),
+                    "instrument": {
+                        "symbol": option_symbol,
+                        "assetType": "OPTION",
+                    },
+                }
+                for instruction, option_symbol in (
+                    ("BUY_TO_CLOSE", option_quote['leg_sell']['symbol']),
+                    ("SELL_TO_CLOSE", option_quote['leg_buy']['symbol']),
+                )
+            ]
+        else:
+            raise ValueError("action must be 'BUY' or 'CLOSE'")
+
         '''
         opposite_legs = [
             {
@@ -863,7 +888,7 @@ class SchwabClient:
         '''
         
         order = {
-            "orderType": "NET_CREDIT",
+            "orderType": order_type,
             "session": "NORMAL",
             "duration": "DAY",
             "orderStrategyType": "SINGLE",
@@ -1140,9 +1165,13 @@ if __name__ == "__main__":
     print (f"days: {days_before}")
 
     client = SchwabClient()
-    client.get_option_chain_data_list(SPX_SYMBOL)
-    #a = client.order_details()  # Get details of the last order placed
-    SchwabClient.genetate_intrday_spx_trade_report(days_before)
+    #client.get_option_chain_data_list(SPX_SYMBOL)
+    a = client.account_orders()  # Get details of the last order placed
+    b = a.json()
+    for x in b:
+         print(f"{x.get("status", "UNKNOWN").upper()}, symbol: {x.get('orderLegCollection', [{}])[0].get('instrument', {}).get('symbol', 'UNKNOWN')}, orderType: {x.get('orderType', 'UNKNOWN')}, price: {x.get('price', 'UNKNOWN')}, quantity: {x.get('quantity', 'UNKNOWN')}, filledQuantity: {x.get('filledQuantity', 'UNKNOWN')}")
+
+    #SchwabClient.genetate_intrday_spx_trade_report(days_before)
 
 
     #to-do:
