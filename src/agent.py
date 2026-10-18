@@ -399,7 +399,8 @@ class TradingAgent:
         match = re.match(auto_spread_order_pattern, clean_command)
         if match:
             data = match.groupdict()
-            spread = client.find_spx_credit_spread(contract_type=data['callput'].upper(), date=datetime(2026, 10, 19))
+            spread = client.find_spx_credit_spread(contract_type=data['callput'].upper())
+            #spread = client.find_spx_credit_spread(contract_type=data['callput'].upper(), date=datetime(2026, 10, 19))
             if spread is None:
                 print(f"{datetime.now()}: No suitable spread found for {data['callput']} auto order.")
                 return None
@@ -435,7 +436,6 @@ class TradingAgent:
             response, order_id = client.place_spx_0dte_single_leg_order(\
                 action=data['action'], \
                 contract_type=data['callput'].upper())
-                # , market_date=datetime(2026,10,19))
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 print(f"{datetime.now()}: {data['action']} {data['callput']} auto order placed successfully. Order ID: {order_id}")
                 ## need to add order reason for it
