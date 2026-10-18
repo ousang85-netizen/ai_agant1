@@ -393,6 +393,62 @@ class TradingAgent:
                 file.close()
             return response
 
+        #buy spread call auto
+        #buy spread put auto
+        auto_spread_order_pattern = r"(?P<action>buy|sell)\s+spread\s+(?P<callput>call|put)\s+auto"
+        match = re.match(auto_spread_order_pattern, clean_command)
+        if match:
+            data = match.groupdict()
+            spread = client.find_spx_credit_spread(contract_type=data['callput'].upper(), date=datetime(2026, 10, 19))
+            if spread is None:
+                print(f"{datetime.now()}: No suitable spread found for {data['callput']} auto order.")
+                return None
+
+            response, order_id = client.place_credit_spread_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
+                                                            sell_strike = spread['sell_strike'], \
+                                                            leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = DEFAULT_SPREAD_QUANTITY,
+                                                            action = data['action'].upper(), contract_type = data['callput'].upper())
+
+            if response != None and response.status_code >= 200 and response.status_code < 300:
+                print(f"{datetime.now()}: Spread order placed successfully. Order ID: {order_id}")
+            elif response != None:
+                print(f"{datetime.now()}: Failed to place spread order. Status code: {response.status_code}, Response: {response.text}")
+            else:
+                print(f"{datetime.now()}: Failed to place spread order. No response received.")
+
+            return response
+
+        #buy call auto
+        #buy put auto
+        auto_option_order_pattern = r"(?P<action>buy)\s+(?P<callput>call|put)\s+auto"
+        match = re.match(auto_option_order_pattern, clean_command)
+        if match:
+            data = match.groupdict()
+            if data["action"] == "buy" and data["callput"] == "call":
+                print(f"Placing a buy call auto order")
+            elif data["action"] == "buy" and data["callput"] == "put":
+                print(f"Placing a buy put auto order")
+            else:
+                print("sell auto is not yet supported")
+                return None
+
+            response, order_id = client.place_spx_0dte_single_leg_order(\
+                action=data['action'], \
+                contract_type=data['callput'].upper())
+                # , market_date=datetime(2026,10,19))
+            if response != None and response.status_code >= 200 and response.status_code < 300:
+                print(f"{datetime.now()}: {data['action']} {data['callput']} auto order placed successfully. Order ID: {order_id}")
+                ## need to add order reason for it
+                trade_reason = input("Trade reason: ").strip()
+                with open(TradingAgent.order_book_filename, "a", encoding="utf-8 ") as file:
+                    file.write(f"{datetime.now()}: {clean_command};{order_id};[{trade_reason}]\n")
+                file.close()
+            elif response != None:
+                print(f"{datetime.now()}: Failed to place {data['action']} {data['callput']} auto order. Status code: {response.status_code}, Response: {response.text}")
+            else:
+                print(f"{datetime.now()}: Failed to place {data['action']} {data['callput']} auto order. No response received.")
+            return response
+
         #bc at 7710
         #bp at 7800
         option_order_pattern = r"(?P<action>bc|bp)\s+at\s+(?P<price>\d+)"
@@ -413,7 +469,7 @@ if __name__ == "__main__":
     import sys
 
     agent = TradingAgent()
-    run_mode = 1
+    run_mode = 0
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in {"command", "c"}:
@@ -435,6 +491,3 @@ if __name__ == "__main__":
             #agent._shutdown_event.set()
 
         
-
-
-

@@ -1,16 +1,30 @@
 """Replay an option order against saved intraday quote snapshots."""
 
 from pathlib import Path
+import math
+import re
 import time
 from typing import Any, Dict, Optional, Sequence, Union
 
 import pandas as pd
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta
 
 try:
-    from .constants import OPTION_PRICE_SCALE, OPTION_PRICE_INCREMENT
+    from .constants import (
+        DEFAULT_BUTTERFLY_LEG_INTERVAL,
+        DEFAULT_SPREAD_LEG_INTERVAL,
+        OPTION_PRICE_SCALE,
+        OPTION_PRICE_INCREMENT,
+        SPXW_OPTION_PREFIX,
+    )
 except ImportError:
-    from constants import OPTION_PRICE_SCALE, OPTION_PRICE_INCREMENT
+    from constants import (
+        DEFAULT_BUTTERFLY_LEG_INTERVAL,
+        DEFAULT_SPREAD_LEG_INTERVAL,
+        OPTION_PRICE_SCALE,
+        OPTION_PRICE_INCREMENT,
+        SPXW_OPTION_PREFIX,
+    )
 
 class OptionTradeChart:
     """Calculate and plot estimated P/L from a semicolon-delimited quote file."""
@@ -49,6 +63,112 @@ class OptionTradeChart:
         if ts.second != 0 or ts.microsecond != 0:
             raise ValueError("timestamp must be at the start of a minute")
         return ts + timedelta(minutes=1)
+
+    @classmethod
+    def plot_command(
+        cls,
+        command: str,
+        entry_date: Union[str, date],
+        entry_time: Union[str, datetime_time, datetime, pd.Timestamp],
+        data_dir: Union[str, Path] = "data",
+    ):
+        """Build and plot a supported ``buy spread/fly at <strike>`` command."""
+        match = re.fullmatch(
+            r"buy\s+(?P<strategy>spread|fly)\s+at\s+(?P<strike>\d+(?:\.\d+)?)",
+            command.strip(),
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            raise ValueError(
+                "command must be 'buy spread at <strike>' or 'buy fly at <strike>'"
+            )
+
+        if isinstance(entry_date, datetime):
+            trade_date = entry_date.date()
+        elif isinstance(entry_date, date):
+            trade_date = entry_date
+        else:
+            try:
+                trade_date = date.fromisoformat(entry_date)
+            except (TypeError, ValueError) as error:
+                raise ValueError("entry_date must be a date in YYYY-MM-DD format") from error
+
+        if isinstance(entry_time, datetime):
+            trade_time = entry_time.time()
+        elif isinstance(entry_time, pd.Timestamp):
+            trade_time = entry_time.time()
+        elif isinstance(entry_time, datetime_time):
+            trade_time = entry_time
+        else:
+            try:
+                trade_time = datetime_time.fromisoformat(entry_time)
+            except (TypeError, ValueError) as error:
+                raise ValueError("entry_time must be a time in HH:MM[:SS] format") from error
+
+        entry_timestamp = datetime.combine(trade_date, trade_time)
+        quote_file = Path(data_dir) / f"spx_quote_{trade_date:%Y%m%d}.csv"
+        chart = cls(quote_file)
+        earlier_quotes = chart.quotes[
+            chart.quotes["timestamp"] <= pd.Timestamp(entry_timestamp)
+        ]
+        if earlier_quotes.empty:
+            raise ValueError(f"No underlying quote at or before {entry_timestamp}")
+        try:
+            underlying_price = float(earlier_quotes.iloc[-1]["underlying_price"])
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"No valid underlying price at or before {entry_timestamp}"
+            ) from error
+        if not math.isfinite(underlying_price) or underlying_price <= 0:
+            raise ValueError(
+                f"No valid underlying price at or before {entry_timestamp}"
+            )
+
+        strategy = match.group("strategy").lower()
+        center_strike = float(match.group("strike"))
+
+        def option_symbol(strike: float, option_type: str) -> str:
+            strike_code = f"{int(round(strike * 1000)):08d}"
+            return f"{SPXW_OPTION_PREFIX}  {trade_date:%y%m%d}{option_type}{strike_code}"
+
+        def make_leg(instruction: str, quantity: int, symbol: str) -> Dict[str, Any]:
+            return {
+                "instruction": instruction,
+                "quantity": str(quantity),
+                "instrument": {"symbol": symbol, "assetType": "OPTION"},
+            }
+
+        legs: list[Dict[str, Any]]
+        if strategy == "spread":
+            option_type = "P" if underlying_price > center_strike else "C"
+            buy_strike = (
+                center_strike - DEFAULT_SPREAD_LEG_INTERVAL
+                if option_type == "P"
+                else center_strike + DEFAULT_SPREAD_LEG_INTERVAL
+            )
+            legs = [
+                make_leg(
+                    "SELL_TO_OPEN",
+                    1,
+                    option_symbol(center_strike, option_type),
+                ),
+                make_leg(
+                    "BUY_TO_OPEN",
+                    1,
+                    option_symbol(buy_strike, option_type),
+                ),
+            ]
+        else:
+            option_type = "P" if underlying_price >= center_strike else "C"
+            interval = DEFAULT_BUTTERFLY_LEG_INTERVAL
+            legs = [
+                make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike - interval, option_type)),
+                make_leg("SELL_TO_OPEN", 2, option_symbol(center_strike, option_type)),
+                make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike + interval, option_type)),
+            ]
+
+        order = {"orderLegCollection": legs}
+        return chart.plot_trade(order, entry_timestamp)
     
     def calculate_profit_loss(
         self,
@@ -145,8 +265,9 @@ class OptionTradeChart:
         order: Union[Dict[str, Any], Sequence[Dict[str, Any]]],
         entry_time: Union[
             str,
+            datetime,
             pd.Timestamp,
-            Sequence[Union[str, pd.Timestamp]],
+            Sequence[Union[str, datetime, pd.Timestamp]],
         ],
         output_file: Optional[Union[str, Path]] = None,
         multiplier: int = 100,
@@ -162,7 +283,7 @@ class OptionTradeChart:
         if not orders or any(not isinstance(trade_order, dict) for trade_order in orders):
             raise ValueError("order must be an order dictionary or a non-empty sequence of orders")
 
-        if isinstance(entry_time, (str, pd.Timestamp)):
+        if isinstance(entry_time, (str, datetime, pd.Timestamp)):
             entry_times = [entry_time] * len(orders)
         else:
             entry_times = list(entry_time)
@@ -224,75 +345,56 @@ class OptionTradeChart:
         return figure, axis
 
 
-if __name__ == "__main__":
-    cur = datetime.now()
-    #also defined in agent.py, but this is for testing the OptionTradeChart class independently
-    spx_quote_filename = f"data/spx_quote_{cur.strftime('%Y%m%d')}.csv"
-    #spx_quote_filename = "data/spx_quote_20261015.csv"
-    chart = OptionTradeChart(spx_quote_filename)
-    #trade 1
-    legs = [
-        {
-            "instruction": instruction,
-            "quantity": quantity,
-            "instrument": {
-                "symbol": option_symbol,
-                "assetType": "OPTION",
-            },
-        }
-        for instruction, quantity, option_symbol in (
-            ("BUY_TO_OPEN", "1",  "SPXW  261016C07760000"),                                    
-            ("SELL_TO_OPEN", "2", "SPXW  261016C07750000"),
-            ("BUY_TO_OPEN", "1",  "SPXW  261016C07740000"),
-        )
-    ]
-    order = {
-        "orderLegCollection": legs
-    }
-    # trade 2
-    legs2 = [
-        {
-            "instruction": instruction,
-            "quantity": quantity,
-            "instrument": {
-                "symbol": option_symbol,
-                "assetType": "OPTION",
-            },
-        }   
-        for instruction, quantity, option_symbol in (
-            ("BUY_TO_OPEN", "1",  "SPXW  261016C07750000"),
-            ("SELL_TO_OPEN", "1", "SPXW  261016C07740000"),
-        )
-    ]
-    order2 = {
-        "orderLegCollection": legs2
-    }
-    
-    # trade 3
-    legs3 = [
-        {
-            "instruction": instruction,
-            "quantity": quantity,
-            "instrument": {
-                "symbol": option_symbol,
-                "assetType": "OPTION",
-            },
-        }
-        for instruction, quantity, option_symbol in (
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07785000"),
-            ("SELL_TO_OPEN", "2", "SPXW  261009C07800000"),
-            ("BUY_TO_OPEN", "1",  "SPXW  261009C07815000"),
-        )
-    ]
-    order3 = {
-        "orderLegCollection": legs3
-    }
-    
+def main() -> None:
+    """Interactively replay spread and butterfly trades from saved quotes."""
+    current_date = date.today()
+    while True:
+        try:
+            command = input(
+                "Command ('buy spread at <strike>', 'buy fly at <strike>', "
+                "'date [YYYY-MM-DD]', or 'quit'): "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
 
-    
-    chart.plot_trade(
-        #order=[order, order2],
-        #entry_time=["2026-10-16 06:32", "2026-10-16 06:50"],
-        order=[order],  
-        entry_time=["2026-10-16 06:32"],
-    )
+        normalized_command = command.lower()
+        if normalized_command in {"quit", "exit", "q"}:
+            break
+        if normalized_command == "date" or normalized_command.startswith("date "):
+            date_value = command[4:].strip()
+            if not date_value:
+                try:
+                    date_value = input("Current date (YYYY-MM-DD): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
+            try:
+                current_date = date.fromisoformat(date_value)
+            except ValueError:
+                print("Date must be in YYYY-MM-DD format.")
+                continue
+            print(f"Using date {current_date.isoformat()}.")
+            continue
+
+        if not re.match(r"buy\s+(?:spread|fly)\b", command, flags=re.IGNORECASE):
+            print(
+                "Enter 'buy spread at <strike>', 'buy fly at <strike>', "
+                "'date [YYYY-MM-DD]', or 'quit'."
+            )
+            continue
+
+        try:
+            entry_time = input("Entry time (HH:MM): ").strip()
+            OptionTradeChart.plot_command(
+                command, current_date.isoformat(), entry_time
+            )
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        except ValueError as error:
+            print(f"Could not plot trade: {error}")
+
+
+if __name__ == "__main__":
+    main()

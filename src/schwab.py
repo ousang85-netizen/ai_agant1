@@ -1,6 +1,9 @@
 """Placeholder utilities for interacting with a Schwab brokerage account."""
 
-from typing import Dict, List
+import csv
+import math
+from pathlib import Path
+from typing import Dict, List, Union
 from time import sleep
 from xmlrpc import client
 import schwabdev
@@ -8,6 +11,9 @@ from datetime import date, datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 import httpx
+
+Date = date
+Time = time
 
 appKey = "JaXlHdgKQCgGB4SLefipOmmtRkIhhTlQTKJAfLhjG8e7VMi4"
 appSecret = "mCtrPqOA8xlbPgf4T6PjFPUNxtNkUct3JY5ZgSpZQ4IZOnC4C3S7BmNreUPkAZ6a" 
@@ -597,6 +603,237 @@ class SchwabClient:
         return {"spread_mid": spread_mid, "max_loss": max_loss, "max_profit": max_profit,
                 "leg_sell": leg_sell, "leg_buy": leg_buy}
 
+    @staticmethod
+    def _load_spx_quote_snapshot(
+        quote_file: Path,
+        market_date: Date,
+        quote_time: Time,
+        option_type: str,
+    ) -> Dict[str, List[Dict]]:
+        """Load one saved SPX option-chain snapshot from a quote CSV."""
+        snapshot_timestamp = datetime.combine(market_date, quote_time)
+        option_code = "C" if option_type == "CALL" else "P"
+        expiration_code = f"{market_date:%y%m%d}{option_code}"
+        chain: Dict[str, List[Dict]] = {}
+
+        try:
+            with quote_file.open(newline="", encoding="utf-8") as quote_stream:
+                for row in csv.reader(quote_stream, delimiter=";"):
+                    if len(row) < 7:
+                        continue
+                    try:
+                        timestamp = datetime.strptime(row[0], "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        continue
+                    if timestamp != snapshot_timestamp:
+                        continue
+
+                    symbol = row[3].strip()
+                    if (
+                        not symbol.startswith(SPXW_OPTION_PREFIX)
+                        or expiration_code not in symbol
+                    ):
+                        continue
+                    try:
+                        strike = float(row[1])
+                        bid = float(row[4])
+                        ask = float(row[5])
+                        delta = float(row[6].removeprefix("delta="))
+                    except ValueError:
+                        continue
+                    if not all(math.isfinite(value) for value in (strike, bid, ask, delta)):
+                        continue
+
+                    chain[str(float(strike))] = [
+                        {
+                            "symbol": symbol,
+                            "bid": bid,
+                            "ask": ask,
+                            "delta": delta,
+                        }
+                    ]
+        except (OSError, csv.Error) as error:
+            raise ValueError(f"Could not read SPX quotes from {quote_file}") from error
+
+        if not chain:
+            raise ValueError(
+                f"No SPX {option_type.lower()} quote snapshot found at "
+                f"{snapshot_timestamp:%Y-%m-%d %H:%M} in {quote_file}"
+            )
+        return chain
+
+    def find_spx_credit_spread(
+        self,
+        contract_type: str,
+        date: Optional[Date] = None,
+        time: Optional[Union[Time, str]] = None,
+    ):
+        """Find an SPX 0-DTE credit spread meeting delta and credit criteria.
+
+        Call short-leg delta must be below 0.20; put short-leg delta must be
+        above -0.20. The short leg is paired with a long leg one default spread
+        interval farther out of the money. The nearest qualifying delta to the
+        threshold is returned when multiple spreads meet the $1.00-$1.70
+        midpoint credit range. Past dates use the saved quote file at the
+        requested HH:MM; today and future dates use the Schwab option chain.
+        """
+        option_type = contract_type.strip().upper()
+        if option_type not in {"CALL", "PUT"}:
+            raise ValueError("contract_type must be 'CALL' or 'PUT'")
+
+        today = datetime.now(NEW_YORK_TIMEZONE).date()
+        if date is None:
+            market_date = today
+        elif isinstance(date, datetime):
+            market_date = date.date()
+        elif isinstance(date, Date):
+            market_date = date
+        elif isinstance(date, str):
+            try:
+                market_date = Date.fromisoformat(date)
+            except ValueError as error:
+                raise ValueError("date must be in YYYY-MM-DD format") from error
+        else:
+            raise TypeError("date must be a datetime.date, ISO date string, or None")
+
+        if market_date < today:
+            if time is None:
+                raise ValueError("time in HH:MM format is required for past dates")
+            if isinstance(time, Time):
+                quote_time = time
+            elif isinstance(time, str):
+                try:
+                    quote_time = Time.fromisoformat(time)
+                except ValueError as error:
+                    raise ValueError("time must be in HH:MM format") from error
+            else:
+                raise TypeError("time must be a datetime.time, HH:MM string, or None")
+            if quote_time.second or quote_time.microsecond:
+                raise ValueError("time must be at minute precision (HH:MM)")
+
+            quote_file = (
+                Path(__file__).resolve().parent.parent
+                / "data"
+                / f"spx_quote_{market_date:%Y%m%d}.csv"
+            )
+            todays_chain = self._load_spx_quote_snapshot(
+                quote_file, market_date, quote_time, option_type
+            )
+        else:
+            chain_request = {
+                "symbol": SPX_SYMBOL,
+                "contractType": option_type,
+                "strikeCount": OPTION_CHAIN_STRIKE_COUNT,
+                "interval": DEFAULT_OPTION_CHAIN_INTERVAL,
+                "strategy": "SINGLE",
+            }
+            if market_date == today:
+                chain_request["daysToExpiration"] = 0
+            else:
+                chain_request["fromDate"] = market_date.isoformat()
+                chain_request["toDate"] = market_date.isoformat()
+
+            response = self._client.option_chains(**chain_request)
+            if response.status_code != 200:
+                raise ValueError(f"Failed to fetch SPX option chain: {response.text}")
+
+            chain_data = response.json()
+            expiration_key = (
+                "callExpDateMap" if option_type == "CALL" else "putExpDateMap"
+            )
+            expiration_map = chain_data.get(expiration_key, {})
+            todays_chain = next(
+                (
+                    contracts
+                    for expiration, contracts in expiration_map.items()
+                    if expiration.split(":", 1)[0] == market_date.isoformat()
+                ),
+                None,
+            )
+            if todays_chain is None:
+                raise ValueError(
+                    f"No SPX {option_type.lower()} contracts expiring on "
+                    f"{market_date.isoformat()}"
+                )
+
+        spreads = []
+        for strike_text, sell_contracts in todays_chain.items():
+            try:
+                sell_strike = float(strike_text)
+                sell_leg = sell_contracts[0]
+                delta = float(sell_leg["delta"])
+            except (IndexError, KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(sell_strike) or not math.isfinite(delta):
+                continue
+            if option_type == "CALL":
+                if not 0 <= delta < 0.2:
+                    continue
+                buy_strike = sell_strike + DEFAULT_SPREAD_LEG_INTERVAL
+            else:
+                if not -0.2 < delta <= 0:
+                    continue
+                buy_strike = sell_strike - DEFAULT_SPREAD_LEG_INTERVAL
+
+            buy_contracts = todays_chain.get(f"{float(buy_strike)}")
+            if not buy_contracts:
+                continue
+            buy_leg = buy_contracts[0]
+            try:
+                spread_bid = float(sell_leg["bid"]) - float(buy_leg["ask"])
+                spread_ask = float(sell_leg["ask"]) - float(buy_leg["bid"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            spread_mid = (spread_bid + spread_ask) / 2
+            if (
+                not math.isfinite(spread_bid)
+                or not math.isfinite(spread_ask)
+                or not 1.0 <= spread_mid <= 1.7
+            ):
+                continue
+
+            sell_symbol = sell_leg.get("symbol")
+            buy_symbol = buy_leg.get("symbol")
+            if (
+                not isinstance(sell_symbol, str)
+                or not sell_symbol.startswith(SPXW_OPTION_PREFIX)
+                or not isinstance(buy_symbol, str)
+                or not buy_symbol.startswith(SPXW_OPTION_PREFIX)
+            ):
+                continue
+            spreads.append(
+                (
+                    abs(abs(delta) - 0.2),
+                    sell_strike,
+                    {
+                        "sell_strike": sell_strike,
+                        "sell_delta": delta,
+                        "buy_strike": buy_strike,
+                        "spread_bid": spread_bid,
+                        "spread_ask": spread_ask,
+                        "spread_mid": spread_mid,
+                        "leg_sell": sell_leg,
+                        "leg_buy": buy_leg,
+                    },
+                )
+            )
+
+        if not spreads:
+            raise ValueError(
+                f"No SPX 0-DTE {option_type.lower()} credit spread found with "
+                "short-leg delta near 0.20 and midpoint credit from $1.00 to $1.70"
+            )
+
+        for item in spreads:
+            print(
+                f"Spread: Sell {item[2]['sell_strike']} (delta={item[2]['sell_delta']:.3f}) "
+                f"Buy {item[2]['buy_strike']} | Midpoint Credit: ${item[2]['spread_mid']:.2f}"
+            )
+
+
+
+        return min(spreads, key=lambda item: (item[0], item[1]))[2]
+
     def place_butterfly_order(
         self,
         underlying_symbol: str,
@@ -716,6 +953,7 @@ class SchwabClient:
         leg_interval: float,
         quantity: int = 1,
         action = "BUY",
+        contract_type: str = None,
         #price: float = None,
     ):
         """Place a limit order to open a call or put credit spread.
@@ -726,7 +964,7 @@ class SchwabClient:
         and ``buy_strike`` is the strike for the option being bought.
         If the current price is above the sell strike, the method creates a put spread
         using ``sell_strike`` and ``buy_strike``. Otherwise it creates a
-        call spread using ``sell_strike`` and ``buy_strike``.
+        call spread using ``sell_strike`` and ``buy_strike``. 
         ``price`` is the net credit per share.
         """
         if action not in {"BUY"}:
@@ -762,6 +1000,13 @@ class SchwabClient:
         else:
             buy_strike = sell_strike + leg_interval
             option_type = "CALL"
+
+        if contract_type is not None:
+            if contract_type.upper() != option_type:
+                print(
+                    f"contract_type {contract_type} does not match determined option type {option_type}"
+                )
+                return None, None
 
         # get option chain to verify that the strikes exist
         option_quote = self.get_spread_quote(
@@ -911,6 +1156,144 @@ class SchwabClient:
                     "SELL", price
                 )
         return response, order_id
+
+    def place_spx_0dte_single_leg_order(
+        self,
+        action: str,
+        contract_type: str,
+        market_date: Optional[date] = None,
+    ):
+        """Buy one SPX 0-DTE call or put.
+
+        Select the nearest-to-the-money contract with an ask from $1.20 to $1.80.
+        If ``market_date`` is omitted, use today's date in New York time.
+        """
+        order_action = action.strip().upper()
+        if order_action != "BUY":
+            raise ValueError("Only 'BUY' action is supported")
+
+        option_type = contract_type.strip().upper()
+        if option_type not in {"CALL", "PUT"}:
+            raise ValueError("contract_type must be 'CALL' or 'PUT'")
+
+        if market_date is None:
+            market_date = datetime.now(NEW_YORK_TIMEZONE).date()
+            expiration_params = {"daysToExpiration": 0}
+        else:
+            if isinstance(market_date, datetime):
+                market_date = market_date.date()
+            elif not isinstance(market_date, date):
+                raise TypeError("market_date must be a datetime.date or None")
+            expiration_params = {
+                "fromDate": market_date.isoformat(),
+                "toDate": market_date.isoformat(),
+            }
+
+        quote = self.get_quote(SPX_SYMBOL)
+        try:
+            underlying_price = float(
+                quote[SPX_SYMBOL]["quote"]["lastPrice"]
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Could not read last price for {SPX_SYMBOL}") from error
+        if not math.isfinite(underlying_price) or underlying_price <= 0:
+            raise ValueError(f"Could not read last price for {SPX_SYMBOL}")
+
+        response = self._client.option_chains(
+            symbol=SPX_SYMBOL,
+            contractType=option_type,
+            strikeCount=OPTION_CHAIN_STRIKE_COUNT,
+            interval=DEFAULT_OPTION_CHAIN_INTERVAL,
+            strategy="SINGLE",
+            **expiration_params,
+        )
+        if response.status_code != 200:
+            raise ValueError(f"Failed to fetch SPX option chain: {response.text}")
+
+        chain_data = response.json()
+        expiration_map_key = (
+            "callExpDateMap" if option_type == "CALL" else "putExpDateMap"
+        )
+        expiration_map = chain_data.get(expiration_map_key, {})
+        todays_chain = next(
+            (
+                contracts
+                for expiration, contracts in expiration_map.items()
+                if expiration.split(":", 1)[0] == market_date.isoformat()
+            ),
+            None,
+        )
+        if todays_chain is None:
+            raise ValueError(
+                f"No SPX {option_type.lower()} contracts expiring today "
+                f"({market_date.isoformat()})"
+            )
+
+        candidates = []
+        for strike_text, contract_list in todays_chain.items():
+            if not contract_list:
+                continue
+            contract = contract_list[0]
+            try:
+                strike = float(strike_text)
+            except (KeyError, TypeError, ValueError):
+                continue
+            symbol = contract.get("symbol")
+            if (
+                not math.isfinite(strike)
+                or not isinstance(symbol, str)
+                or not symbol.startswith(SPXW_OPTION_PREFIX)
+            ):
+                continue
+            try:
+                ask = float(contract["ask"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(ask) or not 1.20 <= ask <= 1.80:
+                continue
+            candidates.append((abs(strike - underlying_price), strike, ask, symbol))
+
+        if not candidates:
+            print(
+                f"No SPX 0-DTE {option_type.lower()} has an ask "
+                "between $1.20 and $1.80"
+            )
+            return None, None
+
+        _, _, limit_price, option_symbol = min(candidates)
+        order = {
+            "orderType": "LIMIT",
+            "session": "NORMAL",
+            "duration": "DAY",
+            "orderStrategyType": "SINGLE",
+            "price": f"{limit_price:.2f}",
+            "orderLegCollection": [
+                {
+                    "instruction": "BUY_TO_OPEN",
+                    "quantity": "1",
+                    "instrument": {
+                        "symbol": option_symbol,
+                        "assetType": "OPTION",
+                    },
+                }
+            ],
+        }
+
+        if not self._confirm_order(order):
+            print("Order not submitted.")
+            return None, None
+
+        order_response = self._client.place_order(self._account_hash, order)
+        order_id = None
+        if 200 <= order_response.status_code < 300:
+            order_id = order_response.headers.get("location", "/").split("/")[-1]
+            if order_id:
+                self._orders.append(order_id)
+                self._record_accepted_order(
+                    order_response, order_id, order, SPX_SYMBOL, 1,
+                    order_action, limit_price
+                )
+        return order_response, order_id
 
     def place_order(self, symbol: str, quantity: int,  action: str = "BUY", price: float = None, stop_price: float = None):
         """Compose an order for a specific Schwab account."""
