@@ -819,11 +819,11 @@ class SchwabClient:
             )
 
         if not spreads:
-            raise ValueError(
+            print(
                 f"No SPX 0-DTE {option_type.lower()} credit spread found with "
                 "short-leg delta near 0.20 and midpoint credit from $1.00 to $1.70"
             )
-
+            return None
         for item in spreads:
             print(
                 f"Spread: Sell {item[2]['sell_strike']} (delta={item[2]['sell_delta']:.3f}) "
@@ -1157,7 +1157,60 @@ class SchwabClient:
                 )
         return response, order_id
 
-    def place_spx_0dte_single_leg_order(
+    def _submit_spx_single_leg_order(
+        self, option_symbol: str, limit_price: float, action: str = "BUY"
+    ):
+        if action not in {"BUY", "SELL"}:
+            print("_submit_spx_single_leg_order: action must be 'BUY' or 'SELL'")
+            return None, None
+        if option_symbol is None or not isinstance(option_symbol, str):
+            print("_submit_spx_single_leg_order: option_symbol is None")
+            return None, None
+        if not math.isfinite(limit_price) or limit_price <= 0 or limit_price > 2:
+            print("_submit_spx_single_leg_order: limit_price must is not right")
+            return None, None
+        
+        instruction = "BUY_TO_OPEN" if action == "BUY" else "SELL_TO_CLOSE"
+        order = {
+            "orderType": "LIMIT",
+            "session": "NORMAL",
+            "duration": "DAY",
+            "orderStrategyType": "SINGLE",
+            "price": f"{limit_price:.2f}",
+            "orderLegCollection": [
+                {
+                    "instruction": instruction,
+                    "quantity": "1",
+                    "instrument": {
+                        "symbol": option_symbol,
+                        "assetType": "OPTION",
+                    },
+                }
+            ],
+        }
+
+        if not self._confirm_order(order):
+            print("Order not submitted.")
+            return None, None
+
+        response = self._client.place_order(self._account_hash, order)
+        order_id = None
+        if 200 <= response.status_code < 300:
+            order_id = response.headers.get("location", "/").split("/")[-1]
+            if order_id:
+                self._orders.append(order_id)
+                self._record_accepted_order(
+                    response,
+                    order_id,
+                    order,
+                    SPX_SYMBOL,
+                    1,
+                    action,
+                    limit_price,
+                )
+        return response, order_id
+
+    def place_spx_0dte_single_leg_auto_order(
         self,
         action: str,
         contract_type: str,
@@ -1249,7 +1302,7 @@ class SchwabClient:
                 ask = float(contract["ask"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if not math.isfinite(ask) or not 1.20 <= ask <= 1.80:
+            if not math.isfinite(ask) or not 1.0 <= ask <= 1.60:
                 continue
             candidates.append((abs(strike - underlying_price), strike, ask, symbol))
 
@@ -1261,39 +1314,116 @@ class SchwabClient:
             return None, None
 
         _, _, limit_price, option_symbol = min(candidates)
-        order = {
-            "orderType": "LIMIT",
-            "session": "NORMAL",
-            "duration": "DAY",
-            "orderStrategyType": "SINGLE",
-            "price": f"{limit_price:.2f}",
-            "orderLegCollection": [
-                {
-                    "instruction": "BUY_TO_OPEN",
-                    "quantity": "1",
-                    "instrument": {
-                        "symbol": option_symbol,
-                        "assetType": "OPTION",
-                    },
-                }
-            ],
-        }
+        return self._submit_spx_single_leg_order(option_symbol, limit_price)
 
-        if not self._confirm_order(order):
-            print("Order not submitted.")
+    def place_spx_0dte_single_leg_buy_limit_order(
+        self,
+        contract_type: str,
+        strike: float,
+        limit_price: float,
+        market_date: Optional[date] = None,
+        action: str = "BUY",
+    ):
+        """Place a one-contract SPX 0-DTE call or put limit order."""
+        option_type = contract_type.strip().upper()
+        if option_type not in {"CALL", "PUT"}:
+            raise ValueError("contract_type must be 'CALL' or 'PUT'")
+
+        order_action = action.strip().upper()
+        if order_action not in {"BUY"}:
+            raise ValueError("action must be 'BUY'")
+
+        try:
+            strike_value = float(strike)  
+        except (TypeError, ValueError) as error:
+            raise ValueError("strike must be a positive finite number") from error
+        if not math.isfinite(strike_value) or strike_value <= 0:
+            raise ValueError("strike must be a positive finite number")
+
+        try:
+            limit_price_value = float(limit_price)
+        except (TypeError, ValueError) as error:
+            raise ValueError("limit_price must be a positive finite number") from error
+        if not math.isfinite(limit_price_value) or limit_price_value <= 0:
+            raise ValueError("limit_price must be a positive finite number")
+
+        if market_date is None:
+            market_date = datetime.now(NEW_YORK_TIMEZONE).date()
+            expiration_params = {"daysToExpiration": 0}
+        else:
+            if isinstance(market_date, datetime):
+                market_date = market_date.date()
+            elif not isinstance(market_date, date):
+                raise TypeError("market_date must be a datetime.date or None")
+            expiration_params = {
+                "fromDate": market_date.isoformat(),
+                "toDate": market_date.isoformat(),
+            }
+
+        response = self._client.option_chains(
+            symbol=SPX_SYMBOL,
+            contractType=option_type,
+            strikeCount=OPTION_CHAIN_STRIKE_COUNT,
+            interval=DEFAULT_OPTION_CHAIN_INTERVAL,
+            strategy="SINGLE",
+            **expiration_params,
+        )
+        if response.status_code != 200:
+            raise ValueError(f"Failed to fetch SPX option chain: {response.text}")
+
+        chain_data = response.json()
+        expiration_map_key = (
+            "callExpDateMap" if option_type == "CALL" else "putExpDateMap"
+        )
+        expiration_map = chain_data.get(expiration_map_key, {})
+        todays_chain = next(
+            (
+                contracts
+                for expiration, contracts in expiration_map.items()
+                if expiration.split(":", 1)[0] == market_date.isoformat()
+            ),
+            None,
+        )
+        if todays_chain is None:
+            raise ValueError(
+                f"No SPX {option_type.lower()} contracts expiring today "
+                f"({market_date.isoformat()})"
+            )
+
+        contract = todays_chain.get(f"{float(strike_value)}")
+        if not contract or not isinstance(contract, list) or not contract:
+            print(
+                f"No SPX 0-DTE {option_type.lower()} contract found "
+                f"at strike {strike_value:g}"
+            )
+            return None, None
+    
+        option_symbol = contract[0].get("symbol")
+
+        if not isinstance(option_symbol, str) or not option_symbol.startswith(SPXW_OPTION_PREFIX):    
+            print(
+                f"SPX 0-DTE {option_type.lower()} contract symbol {option_symbol} "
+                f"at strike {strike_value:g} is invalid"
+            )
             return None, None
 
-        order_response = self._client.place_order(self._account_hash, order)
-        order_id = None
-        if 200 <= order_response.status_code < 300:
-            order_id = order_response.headers.get("location", "/").split("/")[-1]
-            if order_id:
-                self._orders.append(order_id)
-                self._record_accepted_order(
-                    order_response, order_id, order, SPX_SYMBOL, 1,
-                    order_action, limit_price
-                )
-        return order_response, order_id
+        quote_field = "ask" if order_action == "BUY" else "bid"
+        ask_or_bid = contract[0].get(quote_field)
+
+        if limit_price_value > ask_or_bid:
+            print(
+                f"limit_price ({limit_price_value}) must be less than or equal to "
+                f"the current option {quote_field} ({ask_or_bid})"
+            )
+            return None, None
+        if limit_price_value > 2.5:
+            print(
+                f"limit_price ({limit_price_value}) must be less than 2.5")
+            return None, None
+        
+        return self._submit_spx_single_leg_order(
+            option_symbol, limit_price_value, order_action
+        )
 
     def place_order(self, symbol: str, quantity: int,  action: str = "BUY", price: float = None, stop_price: float = None):
         """Compose an order for a specific Schwab account."""

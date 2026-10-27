@@ -213,6 +213,211 @@ class TestPlaceSpX0DteSingleLegOrder(unittest.TestCase):
         self.client._client.place_order.assert_not_called()
 
 
+class TestPlaceSpX0DteSingleLegBuyOrder(unittest.TestCase):
+    def setUp(self):
+        self.client = object.__new__(SchwabClient)
+        self.client._client = Mock()
+        self.client._account_hash = "test-account"
+        self.client._orders = []
+        self.client._order_manager = Mock()
+
+    def test_submits_requested_put_strike_and_limit_price(self):
+        market_date = date(2026, 10, 16)
+        chain_response = Mock(status_code=200)
+        chain_response.json.return_value = {
+            "putExpDateMap": {
+                "2026-10-16:0": {
+                    "4990.0": [
+                        {
+                            "symbol": "SPXW  261016P04990000",
+                            "ask": 12.50,
+                        }
+                    ]
+                }
+            }
+        }
+        submitted_response = Mock(status_code=201)
+        submitted_response.headers = {"location": "/orders/order-456"}
+        self.client._client.option_chains.return_value = chain_response
+        self.client._client.place_order.return_value = submitted_response
+
+        with patch.object(self.client, "_confirm_order", return_value=True):
+            response, order_id = self.client.place_spx_0dte_single_leg_buy_order(
+                "put", 4990, 3.25, market_date=market_date
+            )
+
+        order = self.client._client.place_order.call_args.args[1]
+        self.assertIs(response, submitted_response)
+        self.assertEqual(order_id, "order-456")
+        self.assertEqual(order["orderType"], "LIMIT")
+        self.assertEqual(order["price"], "3.25")
+        self.assertEqual(
+            order["orderLegCollection"][0],
+            {
+                "instruction": "BUY_TO_OPEN",
+                "quantity": "1",
+                "instrument": {
+                    "symbol": "SPXW  261016P04990000",
+                    "assetType": "OPTION",
+                },
+            },
+        )
+        self.assertEqual(
+            self.client._client.option_chains.call_args.kwargs["contractType"],
+            "PUT",
+        )
+        self.client._order_manager.record_order.assert_called_once_with(
+            "order-456", SPX_SYMBOL, 1, "BUY", 3.25, order
+        )
+
+    def test_rejects_non_positive_limit_price_before_fetching_chain(self):
+        with self.assertRaisesRegex(ValueError, "limit_price must be"):
+            self.client.place_spx_0dte_single_leg_buy_order("CALL", 5000, 0)
+
+        self.client._client.option_chains.assert_not_called()
+        self.client._client.place_order.assert_not_called()
+
+    def test_rejects_unavailable_strike_without_submitting(self):
+        self.client._client.option_chains.return_value = Mock(
+            status_code=200,
+            json=Mock(
+                return_value={
+                    "callExpDateMap": {
+                        "2026-10-16:0": {
+                            "5000.0": [
+                                {"symbol": "SPXW  261016C05000000"}
+                            ]
+                        }
+                    }
+                }
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "at strike 5010"):
+            self.client.place_spx_0dte_single_leg_buy_order(
+                "CALL", 5010, 1.25, market_date=date(2026, 10, 16)
+            )
+
+        self.client._client.place_order.assert_not_called()
+
+    def test_rejects_limit_price_not_below_current_option_ask(self):
+        for limit_price in (12.50, 13.00):
+            with self.subTest(limit_price=limit_price):
+                self.client._client.option_chains.return_value = Mock(
+                    status_code=200,
+                    json=Mock(
+                        return_value={
+                            "callExpDateMap": {
+                                "2026-10-16:0": {
+                                    "5000.0": [
+                                        {
+                                            "symbol": "SPXW  261016C05000000",
+                                            "ask": 12.50,
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    ),
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError, "Current option ask must be greater than limit price"
+                ):
+                    self.client.place_spx_0dte_single_leg_buy_order(
+                        "CALL",
+                        5000,
+                        limit_price,
+                        market_date=date(2026, 10, 16),
+                    )
+
+        self.client._client.place_order.assert_not_called()
+
+    def test_submits_sell_to_open_when_limit_exceeds_current_bid(self):
+        self.client._client.option_chains.return_value = Mock(
+            status_code=200,
+            json=Mock(
+                return_value={
+                    "callExpDateMap": {
+                        "2026-10-16:0": {
+                            "5000.0": [
+                                {
+                                    "symbol": "SPXW  261016C05000000",
+                                    "bid": 3.00,
+                                    "ask": 12.50,
+                                }
+                            ]
+                        }
+                    }
+                }
+            ),
+        )
+        submitted_response = Mock(status_code=201)
+        submitted_response.headers = {"location": "/orders/order-789"}
+        self.client._client.place_order.return_value = submitted_response
+
+        with patch.object(self.client, "_confirm_order", return_value=True):
+            response, order_id = self.client.place_spx_0dte_single_leg_buy_order(
+                "CALL",
+                5000,
+                3.25,
+                market_date=date(2026, 10, 16),
+                action="sell",
+            )
+
+        order = self.client._client.place_order.call_args.args[1]
+        self.assertIs(response, submitted_response)
+        self.assertEqual(order_id, "order-789")
+        self.assertEqual(
+            order["orderLegCollection"][0]["instruction"], "SELL_TO_OPEN"
+        )
+        self.client._order_manager.record_order.assert_called_once_with(
+            "order-789", SPX_SYMBOL, 1, "SELL", 3.25, order
+        )
+
+    def test_rejects_sell_limit_at_or_below_current_bid(self):
+        self.client._client.option_chains.return_value = Mock(
+            status_code=200,
+            json=Mock(
+                return_value={
+                    "putExpDateMap": {
+                        "2026-10-16:0": {
+                            "5000.0": [
+                                {
+                                    "symbol": "SPXW  261016P05000000",
+                                    "bid": 3.00,
+                                }
+                            ]
+                        }
+                    }
+                }
+            ),
+        )
+
+        for limit_price in (3.00, 2.75):
+            with self.subTest(limit_price=limit_price):
+                with self.assertRaisesRegex(
+                    ValueError, "Current option bid must be less than limit price"
+                ):
+                    self.client.place_spx_0dte_single_leg_buy_order(
+                        "PUT",
+                        5000,
+                        limit_price,
+                        market_date=date(2026, 10, 16),
+                        action="SELL",
+                    )
+
+        self.client._client.place_order.assert_not_called()
+
+    def test_rejects_unsupported_action_before_fetching_chain(self):
+        with self.assertRaisesRegex(ValueError, "action must be 'BUY' or 'SELL'"):
+            self.client.place_spx_0dte_single_leg_buy_order(
+                "CALL", 5000, 1.25, action="HOLD"
+            )
+
+        self.client._client.option_chains.assert_not_called()
+
+
 class TestFindSpXCreditSpread(unittest.TestCase):
     def setUp(self):
         self.client = object.__new__(SchwabClient)

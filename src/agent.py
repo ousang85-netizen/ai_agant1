@@ -2,6 +2,7 @@
 
 # This file has been cleared as requested. Fill in trading logic here.
 
+import math
 from asyncio import tasks
 import threading
 from typing import Dict, Any, List
@@ -34,6 +35,111 @@ YELLOW = '\033[33m'
 RESET = '\033[0m'
 
 open_orders = []
+
+
+def calculate_atr_position_size(
+    history: pd.DataFrame,
+    entry_price: float,
+    account_equity: float,
+    risk_percent: float = 0.01,
+    atr_period: int = 14,
+    atr_multiplier: float = 2.0,
+) -> Dict[str, Any]:
+    """Calculate Wilder's ATR and a long position size from a fixed risk budget.
+
+    ``history`` must contain numeric ``High``, ``Low``, and ``Close`` columns.
+    ``risk_percent`` is a fraction (for example, ``0.01`` means 1%). The
+    returned share count is rounded down to a whole share.
+    """
+    if (
+        isinstance(atr_period, bool)
+        or not isinstance(atr_period, int)
+        or atr_period < 1
+    ):
+        raise ValueError("atr_period must be a positive integer.")
+    if not isinstance(history, pd.DataFrame):
+        raise ValueError("history must be a pandas DataFrame.")
+
+    required_columns = ("High", "Low", "Close")
+    for column in required_columns:
+        if history.columns.tolist().count(column) != 1:
+            raise ValueError(f"history must contain exactly one '{column}' column.")
+    if len(history) < atr_period:
+        raise ValueError("history must contain at least atr_period rows.")
+
+    prices = {}
+    for column in required_columns:
+        series = pd.to_numeric(history[column], errors="coerce")
+        if series.isna().any() or not series.map(math.isfinite).all():
+            raise ValueError(f"'{column}' values must all be finite numbers.")
+        if (series <= 0).any():
+            raise ValueError(f"'{column}' prices must be greater than zero.")
+        prices[column] = [float(value) for value in series]
+
+    highs = prices["High"]
+    lows = prices["Low"]
+    closes = prices["Close"]
+    if any(high < low for high, low in zip(highs, lows)):
+        raise ValueError("'High' prices must be greater than or equal to 'Low' prices.")
+
+    true_ranges = []
+    for index, (high, low) in enumerate(zip(highs, lows)):
+        if index == 0:
+            true_ranges.append(high - low)
+        else:
+            previous_close = closes[index - 1]
+            true_ranges.append(
+                max(
+                    high - low,
+                    abs(high - previous_close),
+                    abs(low - previous_close),
+                )
+            )
+
+    atr = sum(true_ranges[:atr_period]) / atr_period
+    for true_range in true_ranges[atr_period:]:
+        atr = ((atr_period - 1) * atr + true_range) / atr_period
+    if not math.isfinite(atr):
+        raise ValueError("ATR calculation must produce a finite value.")
+
+    try:
+        entry_price = float(entry_price)
+        account_equity = float(account_equity)
+        risk_percent = float(risk_percent)
+        atr_multiplier = float(atr_multiplier)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "Entry price, account equity, risk percent, and ATR multiplier "
+            "must be numbers."
+        ) from exc
+
+    if not math.isfinite(entry_price) or entry_price <= 0:
+        raise ValueError("entry_price must be a finite number greater than zero.")
+    if not math.isfinite(account_equity) or account_equity <= 0:
+        raise ValueError("account_equity must be a finite number greater than zero.")
+    if not math.isfinite(risk_percent) or not 0 < risk_percent <= 1:
+        raise ValueError("risk_percent must be greater than zero and at most 1.")
+    if not math.isfinite(atr_multiplier) or atr_multiplier <= 0:
+        raise ValueError("atr_multiplier must be a finite number greater than zero.")
+
+    stop_distance = atr * atr_multiplier
+    if not math.isfinite(stop_distance) or stop_distance <= 0:
+        raise ValueError("ATR stop distance must be a finite number greater than zero.")
+    if stop_distance >= entry_price:
+        raise ValueError(
+            "ATR stop distance must be less than entry_price for a positive long stop."
+        )
+
+    risk_amount = account_equity * risk_percent
+    shares = math.floor(risk_amount / stop_distance)
+    return {
+        "atr": atr,
+        "stop_distance": stop_distance,
+        "stop_price": entry_price - stop_distance,
+        "risk_amount": risk_amount,
+        "shares": shares,
+        "position_value": shares * entry_price,
+    }
 
 
 class TradingAgent:
@@ -85,7 +191,7 @@ class TradingAgent:
 
     async def monitor_tasks(self):
         tasks = [
-            asyncio.create_task(self.data_collection_task("dataCollection", 60.0)),
+            asyncio.create_task(self.data_collection_task("dataCollection", 30.0)),
             asyncio.create_task(self.background_task("background", 200.0)),
             # to-do: need to add a scan task.
             asyncio.create_task(self.user_input_listener()),
@@ -245,7 +351,9 @@ class TradingAgent:
                     
         # Normalize command to lowercase for clean matching
         clean_command = command.strip().lower()
-        
+
+        minutes = TradingAgent._ta.market_open_minute()
+
         # Pattern looks for:
         # (?P<action>buy|sell)          -> Matches "buy" or "sell"
         # \s+(?P<quantity>\d+)          -> Matches one or more digits for share size
@@ -341,6 +449,10 @@ class TradingAgent:
         match = re.match(multileg_option_order_pattern, clean_command)   
         if match:
             #client = SchwabClient()
+            if minutes <= 5:
+                print("Do not start trade yet, wait for 15min after open.")
+                return None
+            
             data = match.groupdict()
             if data["strategy"] == "fly" or data["strategy"] == "fly15":
                 if data["strategy"] == "fly15":
@@ -398,6 +510,10 @@ class TradingAgent:
         auto_spread_order_pattern = r"(?P<action>buy|sell)\s+spread\s+(?P<callput>call|put)\s+auto"
         match = re.match(auto_spread_order_pattern, clean_command)
         if match:
+            if minutes <= 5:
+                print("Do not start trade yet, wait for 15min after open.")
+                return None
+                        
             data = match.groupdict()
             spread = client.find_spx_credit_spread(contract_type=data['callput'].upper())
             #spread = client.find_spx_credit_spread(contract_type=data['callput'].upper(), date=datetime(2026, 10, 19))
@@ -433,7 +549,7 @@ class TradingAgent:
                 print("sell auto is not yet supported")
                 return None
 
-            response, order_id = client.place_spx_0dte_single_leg_order(\
+            response, order_id = client.place_spx_0dte_single_leg_auto_order(\
                 action=data['action'], \
                 contract_type=data['callput'].upper())
             if response != None and response.status_code >= 200 and response.status_code < 300:
@@ -449,18 +565,31 @@ class TradingAgent:
                 print(f"{datetime.now()}: Failed to place {data['action']} {data['callput']} auto order. No response received.")
             return response
 
-        #bc at 7710
-        #bp at 7800
-        option_order_pattern = r"(?P<action>bc|bp)\s+at\s+(?P<price>\d+)"
+        #bc at 7710 limit 1.0 
+        #bp at 7800 limit 1.0
+        option_order_pattern = r"(?P<action>bc|bp)\s+at\s+(?P<strike>\d+)\s+limit\s+(?P<price>\d+\.?\d*)"
         match = re.match(option_order_pattern, clean_command)
         if match:
             data = match.groupdict()
-            if data["action"] == "bc":
-                print(f"Placing a naked call order at {data['price']}")
-                price = float(data['price'])
-                #response, order_id = client.place_single_leg_order(underlying_symbol = SPX_SYMBOL, expiration_date = None,
-                #                                                lower_strike = price-DEFAULT_BUTTERFLY_LEG_INTERVAL,        
-                #                                middle_strike = price, upper_strike = price+DEFAULT_BUTTERFLY_LEG_INTERVAL,
+            contract_type = "CALL" if data["action"] == "bc" else "PUT"
+            strike = float(data['strike'])
+            price = float(data['price'])
+            print(f"Placing a naked call order at {strike} with {price}")
+            response, order_id = client.place_spx_0dte_single_leg_buy_limit_order(contract_type, strike, price)
+
+            if response != None and response.status_code >= 200 and response.status_code < 300:
+                print(f"{datetime.now()}: Buy  {contract_type} order at {strike} with {price} placed successfully. Order ID: {order_id}")
+                ## need to add order reason for it
+                trade_reason = input("Trade reason: ").strip()
+                with open(TradingAgent.order_book_filename, "a", encoding="utf-8 ") as file:
+                    file.write(f"{datetime.now()}: {clean_command};{order_id};[{trade_reason}]\n")
+                file.close()
+            elif response != None:
+                print(f"{datetime.now()}: Buy  {contract_type} order at {strike} with {price} placed failed. Status code: {response.status_code}, Response: {response.text}")
+            else:
+                print(f"{datetime.now()}: Buy  {contract_type} order at {strike} with {price} placed failed. No response received.  ")
+            return response
+
 
         print(f"Not yet support this command: {clean_command}")
         return None 
@@ -469,7 +598,7 @@ if __name__ == "__main__":
     import sys
 
     agent = TradingAgent()
-    run_mode = 0
+    run_mode = 1
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in {"command", "c"}:
