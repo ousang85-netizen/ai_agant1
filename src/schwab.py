@@ -15,6 +15,12 @@ import httpx
 Date = date
 Time = time
 
+RED = '\033[31m'
+GREEN = '\033[32m'
+YELLOW = '\033[33m'
+BLUE = '\033[34m'
+RESET = '\033[0m' # Resets the color back to default
+
 appKey = "JaXlHdgKQCgGB4SLefipOmmtRkIhhTlQTKJAfLhjG8e7VMi4"
 appSecret = "mCtrPqOA8xlbPgf4T6PjFPUNxtNkUct3JY5ZgSpZQ4IZOnC4C3S7BmNreUPkAZ6a" 
 callbackUrl = "https://127.0.0.1"
@@ -128,7 +134,8 @@ class SchwabClient:
 
         for id in range(len(legs)):
             report += OrderManager.convert_option_ticker(legs[id]['symbol'])
-            report += "; "
+            if id != len(legs) - 1:
+                report += "/"
             if legs[id]['instruction'].startswith("BUY"):
                 profit -= legs[id]['price'] * legs[id]['quantity']
             elif legs[id]['instruction'].startswith("SELL"):
@@ -142,6 +149,35 @@ class SchwabClient:
         return {"report": report, "profit":profit}
 
     @staticmethod
+    def print_order_simple(order):
+        exec_time = SchwabClient.ToPacificTime(order["enteredTime"])
+        cost = 0.
+        report = ""
+
+        dt = datetime.strptime(exec_time[:-4], "%Y-%m-%d %H:%M:%S")
+
+        report += f"{dt.strftime("%H:%M:%S")}:"
+        legs = SchwabClient.compose_leg_info(order)
+
+        for id in range(len(legs)):
+            report += OrderManager.convert_option_ticker(legs[id]['symbol'])
+            price_multiple = 100 if legs[id]['legType'] == 'OPTION' else 1
+            if id != len(legs) - 1:
+                report += "/"
+            if legs[id]['instruction'].startswith("BUY"):
+                cost += legs[id]['price'] * legs[id]['quantity'] * price_multiple
+            elif legs[id]['instruction'].startswith("SELL"):
+                cost -= legs[id]['price'] * legs[id]['quantity'] *price_multiple
+            else:
+                print(f"Unexpetced instruction : {legs[id]['instruction']}")
+                
+        if order['orderType'] == 'TRAILING_STOP':
+            report += f"->(TRAILING_STOP/{cost:.2f})"
+        else:
+            report += f"->({order["price"]}/{cost:.2f})"
+        return report, cost
+    
+    @staticmethod
     def compose_leg_info(order):
         order_legs = order.get("orderLegCollection")
         legs = []
@@ -152,6 +188,7 @@ class SchwabClient:
             leg["symbol"] = order_leg.get('instrument').get('symbol')
             leg["instruction"] = order_leg["instruction"]
             leg["complexOrderStrategyType"] = order["complexOrderStrategyType"]
+            leg['legType'] = order_leg.get('orderLegType', 'UNKNOWN')
             leg['quantity'] = 0.
             leg['price'] = 0.
             legs.append(leg)
@@ -200,9 +237,9 @@ class SchwabClient:
   
         # pre-check if two order are pair:
         if buy_order['complexOrderStrategyType'] != sell_order['complexOrderStrategyType']:
-            return None
-        if buy_order['complexOrderStrategyType'] == 'BUTTERFLY':
-            print ("compare buterfly")
+            return False, False
+        #if buy_order['complexOrderStrategyType'] == 'BUTTERFLY':
+        #    print ("compare buterfly")
         #need to go through execution legs :
         if 'orderActivityCollection' in buy_order and 'executionLegs' in buy_order["orderActivityCollection"][0]:
             buy_legs = sorted(SchwabClient.compose_leg_info(buy_order), key = lambda x:x["symbol"])
@@ -211,20 +248,22 @@ class SchwabClient:
                         { buy_order.get("orderActivityCollection")[0]['executionType']}")
         else:
             print("Buy order do not have execution legs")
-            return None
+            return False, False
         
         if 'orderActivityCollection' in sell_order and 'executionLegs' in sell_order["orderActivityCollection"][0]:
             sell_legs = sorted(SchwabClient.compose_leg_info(sell_order), key = lambda x:x["symbol"])
             if sell_order.get("orderActivityCollection")[0]['executionType'] != 'FILL':
                 print(f"sell order executon leg executeType is not FILL \
                         { sell_order.get("orderActivityCollection")[0]['executionType']}")
+                return False, False
         else:
-            print("Sell order do not have execution legs")
-            return None
+            print(f"Sell order do not have execution legs, sell order status is {sell_order['status']}")
+            return False, False
 
         if len(buy_legs)!= len(sell_legs):
-            return None
+            return False, False
 
+        '''
         # collect symbol 
         profit = 0.
         buy_time = SchwabClient.ToPacificTime(buy_order["enteredTime"])
@@ -255,6 +294,33 @@ class SchwabClient:
         profit *= 100
         report += f"profit:{profit:.2f}"
         return {"report": report, "profit":profit}
+        '''
+        completed = True
+        for id in range(len(buy_legs)):
+            if buy_legs[id].keys() != sell_legs[id].keys():
+                return False, False
+            if buy_legs[id]['symbol'] != sell_legs[id]['symbol']:
+                return False, False
+            if buy_legs[id]['instruction'] == "BUY_TO_OPEN":
+                if sell_legs[id]['instruction'] != "SELL_TO_CLOSE":
+                    return False, False
+            elif buy_legs[id]['instruction'] == "SELL_TO_OPEN":
+                if sell_legs[id]['instruction'] != "BUY_TO_CLOSE":
+                    return False, False
+            elif buy_legs[id]['instruction'] == "BUY":
+                if sell_legs[id]['instruction'] != "SELL":
+                    return False, False
+            else:
+                print(RED + f"buy/sell, open/close does not match {buy_legs[id]['symbol']}" + RESET)
+                return False, False
+            
+            if buy_legs[id]['quantity'] < sell_legs[id]['quantity']:
+                print(f" open quantity{buy_legs[id]['quantity']} is more than close quantity {sell_legs[id]['quantity']}")
+                return False, False
+            elif buy_legs[id]['quantity'] > sell_legs[id]['quantity']:
+                completed = False
+        return True, completed
+
 
     def get_linked_accounts(self) -> List[Dict]:
         """Return a list of linked Schwab accounts."""
@@ -1603,71 +1669,90 @@ class SchwabClient:
         all = SchwabClient.account_orders(days_before = days_before).json()
         if all is None:
             print("failed to account_orders")
-        buy_orders = []
-        sell_orders = []
-        others = []
-        reports = []
-        remains = []
+
+        open_orders = []
+        close_orders = []
+        executed_orders = []
+        report = []
+        total_profit = 0
         for order in all:
 
-            if order['status'] in ['REJECTED', 'CANCELED', 'EXPIRED', 'REPLACED']:
+            if order['status'] in ['REJECTED', 'CANCELED', 'EXPIRED', 'REPLACED', 'PENDING_ACTIVATION']:
                 continue
             if order['status'] not in  ['FILLED', 'REPLACED']:
                 print(f"ORDER STATUS not expected: {order['status']}")
-            if 'orderLegCollection' in order:
-                symbol = order['orderLegCollection'][0]['instrument']['symbol']
-                if not symbol.startswith(SPXW_OPTION_PREFIX):
-                    print(f"{symbol} is not start with {SPXW_OPTION_PREFIX}!!")
-                    continue
-                if order['orderLegCollection'][0]['instruction'].startswith('BUY'):
-                    buy_orders.append(order)
-                elif order['orderLegCollection'][0]['instruction'].startswith('SELL'):
-                    sell_orders.append(order)
-                else:
-                    others.append(order)
-                    print(f"OrderType {symbol}, {order['orderType']} is NOT credit or debit")
-        total = 0.
-        for buy_order in buy_orders:
-            found = False
-            to_remove = None
-            for sell_order in sell_orders:
-                res = SchwabClient.compare_multi_leg_option_orders(buy_order, sell_order)
-                if res != None:
-                    to_remove = sell_order
-                    reports.append(res["report"])
-                    total += res["profit"]
-                    found = True
-                    break
-            if not found:
-                remains.append(buy_order)
+            executed_orders.append(order)
+
+        executed_orders.sort(
+            key=lambda order: datetime.fromisoformat(
+                order["enteredTime"].replace("Z", "+00:00")
+            )
+        ) 
+
+        for order in executed_orders:
+            if 'orderLegCollection' not in order:
+                print(f"order does not include leg info, strategyType: {order["orderStrategyType"]}")
+                continue
+            if order['orderLegCollection'][0]['instruction'].endswith('CLOSE'):
+                close_orders.append(order)
+            elif order['orderLegCollection'][0]['instruction'].endswith('OPEN'):
+                open_orders.append(order)
+            elif order['orderLegCollection'][0]['instruction'] == 'BUY':
+                open_orders.append(order)
+            elif order['orderLegCollection'][0]['instruction'] == 'SELL':
+                close_orders.append(order)
             else:
-                sell_orders.remove(to_remove)
-
-        for x in remains:
-            res = SchwabClient.report_unpaired_order(x)
-            reports.append(res["report"])
-            total += res["profit"]
-
-        for x in sell_orders:
-            res = SchwabClient.report_unpaired_order(x)
-            reports.append(res["report"])
-            total += res["profit"]
-
-        if others:
-            print("There are unknown order type, neither buy nor sell")
-
+                print(f"order does not contain OPEN or CLOSE: {order['orderLegCollection'][0]['instruction']}")
 
         print("=" * 30)
-        for report in reports:
-            print(report)
+        for open_order in open_orders:
+            completely_closed = False
+            closes = []
+            profits = 0.
+            text = ""
+            t, cost = SchwabClient.print_order_simple(open_order)
+            profits -= cost
+            text += t
+            for close_order in close_orders:
+                matched, completed = SchwabClient.compare_multi_leg_option_orders(open_order, close_order)
+                if matched and completed: 
+                    completely_closed = True
+                    closes.append(close_order)
+                    close_orders.remove(close_order)
+                    break
+                elif matched:
+                    closes.append(close_order)
+                    close_orders.remove(close_order)
+                    break
+
+            if completely_closed:
+                text += "   ===>   "
+                for cl in closes:
+                    t, cost = SchwabClient.print_order_simple(cl)
+                    text += t
+                    profits -= cost
+                    text += ";"
+
+            if closes and not completely_closed:
+                report += "only partial completed"
+            text += f" profit: {profits:.2f}"
+            total_profit += profits
+            print(text)
+        if close_orders:
+            print(f"stillhave orders not find open ones {len(close_orders)}")
+            for cl in close_orders:
+                 t, cost = SchwabClient.print_order_simple(cl)
+                 print(RED+t+RESET)
+                 total_profit -= cost
+
         print("-" * 30)
-        print(f"Total: {total:.2f}")
+        print(f"Total: {total_profit:.2f}")
 
 if __name__ == "__main__":
 
     import argparse
 
-    days_before = 0
+    days_before = 2
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--days", type=int, default=None, help="Number of days")
     args = parser.parse_args()
@@ -1679,12 +1764,14 @@ if __name__ == "__main__":
 
     client = SchwabClient()
     #client.get_option_chain_data_list(SPX_SYMBOL)
-    a = client.account_orders()  # Get details of the last order placed
+    a = client.account_orders(days_before)  # Get details of the last order placed
     b = a.json()
     for x in b:
-         print(f"{x.get("status", "UNKNOWN").upper()}, symbol: {x.get('orderLegCollection', [{}])[0].get('instrument', {}).get('symbol', 'UNKNOWN')}, orderType: {x.get('orderType', 'UNKNOWN')}, price: {x.get('price', 'UNKNOWN')}, quantity: {x.get('quantity', 'UNKNOWN')}, filledQuantity: {x.get('filledQuantity', 'UNKNOWN')}")
+          st = SchwabClient.print_order_simple(x)
+          print(f"{x.get("status", "UNKNOWN").upper()}, {st}")
+          #symbol: {x.get('orderLegCollection', [{}])[0].get('instrument', {}).get('symbol', 'UNKNOWN')}, orderType: {x.get('orderType', 'UNKNOWN')}, price: {x.get('price', 'UNKNOWN')}, quantity: {x.get('quantity', 'UNKNOWN')}, filledQuantity: {x.get('filledQuantity', 'UNKNOWN')}")
 
-    #SchwabClient.genetate_intrday_spx_trade_report(days_before)
+    SchwabClient.genetate_intrday_spx_trade_report(days_before)
 
 
     #to-do:

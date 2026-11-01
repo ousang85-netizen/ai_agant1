@@ -77,6 +77,8 @@ class OrderManager:
             return ticker
             
         option_type, strike = match.groups()
+        if not ticker.startswith('SPXW'):
+            return f"{ticker.split(' ',1)[0]} {strike}{option_type}" 
         return f"{strike}{option_type}"
 
     def simple_order_str(self, order_detail):
@@ -384,8 +386,14 @@ class OrderManager:
         else:
             filename = self.status_check_file_name            
             with open(filename, "a", newline="", encoding="utf-8") as file:
-                file.write(f"{simple_desc}; P/L: {profit_loss:.2f}\n")
+                if profit_loss is None:
+                    file.write(f"{simple_desc}; P/L: None\n")
+                else:
+                    file.write(f"{simple_desc}; P/L: {profit_loss:.2f}\n")
+                if simple_desc is None:
+                    print("simple_desc is None")
                 #writer = csv.DictWriter(file, fieldnames=self._fields)
                 #if file.tell() == 0:
                 #    writer.writeheader()
                 #writer.writerow(row)
+                file.close()
