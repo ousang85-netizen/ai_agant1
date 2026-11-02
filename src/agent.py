@@ -540,6 +540,9 @@ class TradingAgent:
         auto_option_order_pattern = r"(?P<action>buy)\s+(?P<callput>call|put)\s+auto"
         match = re.match(auto_option_order_pattern, clean_command)
         if match:
+            if minutes <= 15:
+                print("Do not start trade yet, wait for 15min after open.")
+                return None
             data = match.groupdict()
             if data["action"] == "buy" and data["callput"] == "call":
                 print(f"Placing a buy call auto order")

@@ -118,6 +118,8 @@ class SchwabClient:
 
     @staticmethod
     def ToPacificTime(schwab_time:str):
+        if schwab_time is None:
+            return None
         utc_dt_rest = datetime.fromisoformat(schwab_time.replace("Z", "+00:00")) 
         pacific_dt_rest = utc_dt_rest.astimezone(PACIFIC_TIMEZONE)
 
@@ -150,16 +152,29 @@ class SchwabClient:
 
     @staticmethod
     def print_order_simple(order):
-        exec_time = SchwabClient.ToPacificTime(order["enteredTime"])
+        entered_time = SchwabClient.ToPacificTime(order["enteredTime"])
+        closed_time = SchwabClient.ToPacificTime(order.get('closeTime', None))
         cost = 0.
         report = ""
 
-        dt = datetime.strptime(exec_time[:-4], "%Y-%m-%d %H:%M:%S")
+        entered_dt = datetime.strptime(entered_time[:-4], "%Y-%m-%d %H:%M:%S")
+        if closed_time:
+            closed_dt = datetime.strptime(closed_time[:-4], "%Y-%m-%d %H:%M:%S")
+            report += f"{entered_dt.strftime("%H:%M:%S")}/{closed_dt.strftime("%H:%M:%S")}:"
+        else:
+            report += f"{entered_dt.strftime("%H:%M:%S")}/NA:"
 
-        report += f"{dt.strftime("%H:%M:%S")}:"
         legs = SchwabClient.compose_leg_info(order)
 
         for id in range(len(legs)):
+            action =  legs[id].get('instruction', "UNKNOWN")
+            if action.startswith('BUY'):
+                report += '+'
+            elif action.startswith('SELL'):
+                report += '-'
+            else:
+                print(f"unknown instruction {action}")
+
             report += OrderManager.convert_option_ticker(legs[id]['symbol'])
             price_multiple = 100 if legs[id]['legType'] == 'OPTION' else 1
             if id != len(legs) - 1:
@@ -1226,14 +1241,14 @@ class SchwabClient:
     def _submit_spx_single_leg_order(
         self, option_symbol: str, limit_price: float, action: str = "BUY"
     ):
-        if action not in {"BUY", "SELL"}:
-            print("_submit_spx_single_leg_order: action must be 'BUY' or 'SELL'")
+        if action not in {"BUY"}:
+            print("_submit_spx_single_leg_order: action must be 'BUY'")
             return None, None
         if option_symbol is None or not isinstance(option_symbol, str):
             print("_submit_spx_single_leg_order: option_symbol is None")
             return None, None
-        if not math.isfinite(limit_price) or limit_price <= 0 or limit_price > 2:
-            print("_submit_spx_single_leg_order: limit_price must is not right")
+        if not math.isfinite(limit_price) or limit_price <= 0.5 or limit_price > 3.2:
+            print(f"_submit_spx_single_leg_order: limit_price {limit_price} is not right")
             return None, None
         
         instruction = "BUY_TO_OPEN" if action == "BUY" else "SELL_TO_CLOSE"
@@ -1241,7 +1256,7 @@ class SchwabClient:
             "orderType": "LIMIT",
             "session": "NORMAL",
             "duration": "DAY",
-            "orderStrategyType": "SINGLE",
+            "orderStrategyType": "TRIGGER",
             "price": f"{limit_price:.2f}",
             "orderLegCollection": [
                 {
@@ -1253,6 +1268,28 @@ class SchwabClient:
                     },
                 }
             ],
+            "childOrderStrategies": [
+                {
+                    "orderStrategyType": "SINGLE",
+                    "orderType": "TRAILING_STOP", # The subsequent conditional order
+                    #"orderType": "STOP", # The subsequent conditional order
+                    "session": "NORMAL",
+                    "duration": "GOOD_TILL_CANCEL",
+                    "stopPriceLinkBasis": "LAST",     # Options can trigger based on LAST, BID, ASK, or MARK
+                    "stopPriceLinkType": "VALUE",     # "VALUE" for fixed dollar offset, "PERCENT" for %
+                    "stopPriceOffset": f"{limit_price/3.0:.2f}",      # Trails $2.00 behind the highest price reached
+                    "orderLegCollection": [
+                        {
+                            "instruction": "SELL_TO_CLOSE",
+                            "quantity": "1",
+                            "instrument": {
+                                "symbol": option_symbol,
+                                "assetType": "OPTION"
+                            }
+                        }
+                    ]
+                }
+            ]
         }
 
         if not self._confirm_order(order):
@@ -1366,9 +1403,12 @@ class SchwabClient:
                 continue
             try:
                 ask = float(contract["ask"])
+                delta = float(contract["delta"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if not math.isfinite(ask) or not 1.0 <= ask <= 1.60:
+            if not math.isfinite(ask) or not 1.5 <= ask <= 3.2:
+                continue
+            if not math.isfinite(delta) or not 0.08 <= delta < 0.15:
                 continue
             candidates.append((abs(strike - underlying_price), strike, ask, symbol))
 
@@ -1482,9 +1522,9 @@ class SchwabClient:
                 f"the current option {quote_field} ({ask_or_bid})"
             )
             return None, None
-        if limit_price_value > 2.5:
+        if limit_price_value > 3.2:
             print(
-                f"limit_price ({limit_price_value}) must be less than 2.5")
+                f"limit_price ({limit_price_value}) must be less than 3.2")
             return None, None
         
         return self._submit_spx_single_leg_order(
@@ -1752,7 +1792,7 @@ if __name__ == "__main__":
 
     import argparse
 
-    days_before = 2
+    days_before = 0
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--days", type=int, default=None, help="Number of days")
     args = parser.parse_args()
@@ -1764,11 +1804,11 @@ if __name__ == "__main__":
 
     client = SchwabClient()
     #client.get_option_chain_data_list(SPX_SYMBOL)
-    a = client.account_orders(days_before)  # Get details of the last order placed
+    a = client.account_orders(days_before = days_before)  # Get details of the last order placed
     b = a.json()
     for x in b:
-          st = SchwabClient.print_order_simple(x)
-          print(f"{x.get("status", "UNKNOWN").upper()}, {st}")
+          st, cost = SchwabClient.print_order_simple(x)
+          print(f"{x.get("status", "UNKNOWN").upper()}, {st}, cost = {cost}")
           #symbol: {x.get('orderLegCollection', [{}])[0].get('instrument', {}).get('symbol', 'UNKNOWN')}, orderType: {x.get('orderType', 'UNKNOWN')}, price: {x.get('price', 'UNKNOWN')}, quantity: {x.get('quantity', 'UNKNOWN')}, filledQuantity: {x.get('filledQuantity', 'UNKNOWN')}")
 
     SchwabClient.genetate_intrday_spx_trade_report(days_before)

@@ -74,7 +74,7 @@ class OptionTradeChart:
     ):
         """Build and plot a supported ``buy spread/fly at <strike>`` command."""
         match = re.fullmatch(
-            r"buy\s+(?P<strategy>spread|fly)\s+at\s+(?P<strike>\d+(?:\.\d+)?)",
+            r"buy\s+(?P<strategy>spread|fly|single)\s+at\s+(?P<strike>\d+(?:\.\d+)?)",
             command.strip(),
             flags=re.IGNORECASE,
         )
@@ -158,13 +158,18 @@ class OptionTradeChart:
                     option_symbol(buy_strike, option_type),
                 ),
             ]
-        else:
+        elif strategy == "fly":
             option_type = "P" if underlying_price >= center_strike else "C"
             interval = DEFAULT_BUTTERFLY_LEG_INTERVAL
             legs = [
                 make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike - interval, option_type)),
                 make_leg("SELL_TO_OPEN", 2, option_symbol(center_strike, option_type)),
                 make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike + interval, option_type)),
+            ]
+        else:
+            option_type = "P" if underlying_price >= center_strike else "C"
+            legs = [
+                make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike, option_type)),
             ]
 
         order = {"orderLegCollection": legs}
@@ -377,9 +382,9 @@ def main() -> None:
             print(f"Using date {current_date.isoformat()}.")
             continue
 
-        if not re.match(r"buy\s+(?:spread|fly)\b", command, flags=re.IGNORECASE):
+        if not re.match(r"buy\s+(?:spread|fly|single)\b", command, flags=re.IGNORECASE):
             print(
-                "Enter 'buy spread at <strike>', 'buy fly at <strike>', "
+                "Enter 'buy spread at <strike>', 'buy fly at <strike>', 'single at <strike>"
                 "'date [YYYY-MM-DD]', or 'quit'."
             )
             continue
