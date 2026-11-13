@@ -98,6 +98,7 @@ class TechnicalAnalyzer:
     
     def speak(self, text):
 
+        return
         text_to_speech = pyttsx3.init()
         text_to_speech.setProperty('rate', 150)
         text_to_speech.setProperty('volume', 0.005)

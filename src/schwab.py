@@ -48,6 +48,12 @@ try:
         TAKE_PROFIT_MULTIPLIER,
         UTC_TIMEZONE,
         VIX_SYMBOL,
+        MIN_SINGLE_OPTION_PRICE,
+        MAX_SINGLE_OPTION_PRICE,
+        MIN_DELTA_FOR_SINGLE_OPTION,
+        MAX_DELTA_FOR_SINGLE_OPTION,
+        MAX_DEBIT_SPREAD_PRICE,
+        MIN_DEBIT_SPREAD_PRICE,
     )
     from .order_manager import OrderManager
 except ImportError:
@@ -72,6 +78,13 @@ except ImportError:
         TAKE_PROFIT_MULTIPLIER,
         UTC_TIMEZONE,
         VIX_SYMBOL,
+        MIN_SINGLE_OPTION_PRICE,
+        MAX_SINGLE_OPTION_PRICE,
+        MIN_DELTA_FOR_SINGLE_OPTION,
+        MAX_DELTA_FOR_SINGLE_OPTION,
+        MAX_DEBIT_SPREAD_PRICE,
+        MIN_DEBIT_SPREAD_PRICE,
+
     )
     from order_manager import OrderManager
 
@@ -869,7 +882,7 @@ class SchwabClient:
             if (
                 not math.isfinite(spread_bid)
                 or not math.isfinite(spread_ask)
-                or not 1.0 <= spread_mid <= 1.7
+                or not MIN_CREDIT_SPREAD_PRICE <= spread_mid <= MAX_CREDIT_SPREAD_PRICE
             ):
                 continue
 
@@ -902,7 +915,7 @@ class SchwabClient:
         if not spreads:
             print(
                 f"No SPX 0-DTE {option_type.lower()} credit spread found with "
-                "short-leg delta near 0.20 and midpoint credit from $1.00 to $1.70"
+                f"short-leg delta near 0.20 and midpoint credit from {MIN_CREDIT_SPREAD_PRICE} to {MAX_CREDIT_SPREAD_PRICE}"
             )
             return None
         for item in spreads:
@@ -926,6 +939,8 @@ class SchwabClient:
         contract_type: str = None,
         price: float = None,
         action: str = "BUY",
+        upper_price_limit: float = None,
+        limit_price: float = None,
     ):
         """Place a limit order for an opening call or put butterfly.
 
@@ -940,24 +955,31 @@ class SchwabClient:
             raise ValueError("strikes must be ordered lower < middle < upper")
         if quantity <= 0:
             raise ValueError("quantity must be positive")
+        if upper_price_limit is not None and upper_price_limit <= 0:
+            raise ValueError("upper_price_limit must be positive")
+        if limit_price is not None and limit_price <= 0:
+            raise ValueError("limit_price must be positive")
 
-        if contract_type is None:
-            quote = self.get_quote(underlying_symbol)
-            try:
-                current_price = float(quote[underlying_symbol]["quote"]["lastPrice"])
-            except (KeyError, TypeError, ValueError) as error:
-                raise ValueError(
-                    f"Could not read last price for {underlying_symbol}"
-                ) from error
-            if current_price >= middle_strike:
-                contract_type = "PUT"
-            else:
-                contract_type = "CALL"
+        quote = self.get_quote(underlying_symbol)
+        try:
+            current_price = float(quote[underlying_symbol]["quote"]["lastPrice"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"Could not read last price for {underlying_symbol}"
+            ) from error
+        if current_price >= middle_strike:
+            expected_contract_type = "PUT"
         else:
+            expected_contract_type = "CALL"
+
+        if contract_type is not None:
             contract_type = contract_type.upper()
-            if contract_type not in {"CALL", "PUT"}:
-                raise ValueError("action must be 'CALL' or 'PUT'")
-            
+            if contract_type != expected_contract_type:
+                print(f"Expected contract type: {expected_contract_type} but got {contract_type}")
+                return None, None
+        else:
+            contract_type = expected_contract_type
+
         order_action = action.upper()
         if order_action not in {"BUY", "SELL"}:
             raise ValueError("action must be 'BUY' or 'SELL'")
@@ -999,8 +1021,18 @@ class SchwabClient:
                 instructions, quantities, symbols
             )
         ]
-        price = fly_quote['butterfly_mid']
+        if limit_price is not None:
+            price = min(fly_quote['butterfly_mid'], limit_price)
+        else:
+            price = fly_quote['butterfly_mid']
+
         price = round(price * OPTION_PRICE_SCALE) / OPTION_PRICE_SCALE
+        if upper_price_limit and price > upper_price_limit:
+            print(
+                f"butterfly price ({price}) is over current limit of "
+                f"{upper_price_limit}"
+            )
+            return None, None
         order = {
             "orderType": "NET_DEBIT " if order_action == "BUY" else "NET_CREDIT",
             "session": "NORMAL",
@@ -1033,9 +1065,9 @@ class SchwabClient:
         sell_strike: float,
         leg_interval: float,
         quantity: int = 1,
-        action = "BUY",
+        action = "SELL",
         contract_type: str = None,
-        #price: float = None,
+        limit_price: float = None,
     ):
         """Place a limit order to open a call or put credit spread.
 
@@ -1048,7 +1080,7 @@ class SchwabClient:
         call spread using ``sell_strike`` and ``buy_strike``. 
         ``price`` is the net credit per share.
         """
-        if action not in {"BUY"}:
+        if action not in {"LONG","SELL"}:
             raise ValueError("action must be 'BUY' ,  'CLOSE' not yet supported")
         if expiration_date is not None and not isinstance(expiration_date, date):
             raise TypeError("expiration_date must be a datetime.date")
@@ -1109,9 +1141,11 @@ class SchwabClient:
            (not option_quote['leg_buy']['symbol'].startswith(SPXW_OPTION_PREFIX)):
             if underlying_symbol == SPX_SYMBOL:
                 raise ValueError("spx option symbol {option_quote['leg_sell']['symbol']} is not right")
-            
+
+        if limit_price is not None:
+            price = min(price, limit_price)
         price = round(price * OPTION_PRICE_SCALE) / OPTION_PRICE_SCALE
-        if action == "BUY":
+        if action == "SELL":
             order_type = "NET_CREDIT"
             if price > MAX_CREDIT_SPREAD_PRICE:
                 print(
@@ -1137,6 +1171,34 @@ class SchwabClient:
                 for instruction, option_symbol in (
                     ("SELL_TO_OPEN", option_quote['leg_sell']['symbol']),
                     ("BUY_TO_OPEN", option_quote['leg_buy']['symbol']),
+                )
+            ]
+        elif action == "LONG":
+            order_type = "NET_DEBIT"
+            if price > MAX_DEBIT_SPREAD_PRICE:
+                print(
+                    f"debit spread price ({price}) is over current limit of "
+                    f"{MAX_DEBIT_SPREAD_PRICE}"
+                )
+                return None, None
+            if price < MIN_DEBIT_SPREAD_PRICE:
+                print(
+                    f"debit spread price ({price}) is below current limit of "
+                    f"{MIN_DEBIT_SPREAD_PRICE}"
+                )
+                return None, None
+            legs = [
+                {
+                    "instruction": instruction,
+                    "quantity": str(quantity),
+                    "instrument": {
+                        "symbol": option_symbol,
+                        "assetType": "OPTION",
+                    },
+                }
+                for instruction, option_symbol in (
+                    ("BUY_TO_OPEN", option_quote['leg_sell']['symbol']),
+                    ("SELL_TO_OPEN", option_quote['leg_buy']['symbol']),
                 )
             ]
         elif action == "CLOSE":
@@ -1247,7 +1309,7 @@ class SchwabClient:
         if option_symbol is None or not isinstance(option_symbol, str):
             print("_submit_spx_single_leg_order: option_symbol is None")
             return None, None
-        if not math.isfinite(limit_price) or limit_price <= 0.5 or limit_price > 3.2:
+        if not math.isfinite(limit_price) or limit_price <= MIN_SINGLE_OPTION_PRICE or limit_price > MAX_SINGLE_OPTION_PRICE:
             print(f"_submit_spx_single_leg_order: limit_price {limit_price} is not right")
             return None, None
         
@@ -1406,16 +1468,22 @@ class SchwabClient:
                 delta = float(contract["delta"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if not math.isfinite(ask) or not 1.5 <= ask <= 3.2:
+
+
+            if not math.isfinite(ask) or not MIN_SINGLE_OPTION_PRICE <= ask <= MAX_SINGLE_OPTION_PRICE:
                 continue
-            if not math.isfinite(delta) or not 0.08 <= delta < 0.15:
-                continue
+            if not math.isfinite(delta):
+                if option_type == "CALL" and not (MIN_DELTA_FOR_SINGLE_OPTION <= delta < MAX_DELTA_FOR_SINGLE_OPTION):  
+                    continue
+                if option_type == "PUT" and not (-MAX_DELTA_FOR_SINGLE_OPTION < delta <= -MIN_DELTA_FOR_SINGLE_OPTION):
+                    continue
+            
             candidates.append((abs(strike - underlying_price), strike, ask, symbol))
 
         if not candidates:
             print(
                 f"No SPX 0-DTE {option_type.lower()} has an ask "
-                "between $1.20 and $1.80"
+                f"between ${MIN_SINGLE_OPTION_PRICE} and ${MAX_SINGLE_OPTION_PRICE} with delta between ${MIN_DELTA_FOR_SINGLE_OPTION} and ${MAX_DELTA_FOR_SINGLE_OPTION}"
             )
             return None, None
 
@@ -1522,9 +1590,11 @@ class SchwabClient:
                 f"the current option {quote_field} ({ask_or_bid})"
             )
             return None, None
-        if limit_price_value > 3.2:
+        if limit_price_value > MAX_SINGLE_OPTION_PRICE:
             print(
-                f"limit_price ({limit_price_value}) must be less than 3.2")
+                f"limit_price ({limit_price_value}) must be less than or equal to "
+                f"{MAX_SINGLE_OPTION_PRICE}"
+            )
             return None, None
         
         return self._submit_spx_single_leg_order(

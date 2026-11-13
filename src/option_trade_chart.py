@@ -74,13 +74,13 @@ class OptionTradeChart:
     ):
         """Build and plot a supported ``buy spread/fly at <strike>`` command."""
         match = re.fullmatch(
-            r"buy\s+(?P<strategy>spread|fly|single)\s+at\s+(?P<strike>\d+(?:\.\d+)?)",
+            r"(?P<action>buy|long|sell)\s+(?P<strategy>spread|fly|flyup|flydown|call|put)\s+at\s+(?P<strike>\d+(?:\.\d+)?)",
             command.strip(),
             flags=re.IGNORECASE,
         )
         if not match:
             raise ValueError(
-                "command must be 'buy spread at <strike>' or 'buy fly at <strike>'"
+                "command must be 'buy/long/sell spread at <strike>', 'buy/long/sell fly at <strike>', 'buy/long/sell call at <strike>', or 'buy/long/sell put at <strike>'"
             )
 
         if isinstance(entry_date, datetime):
@@ -125,6 +125,7 @@ class OptionTradeChart:
             )
 
         strategy = match.group("strategy").lower()
+        action = match.group("action").lower()
         center_strike = float(match.group("strike"))
 
         def option_symbol(strike: float, option_type: str) -> str:
@@ -146,18 +147,33 @@ class OptionTradeChart:
                 if option_type == "P"
                 else center_strike + DEFAULT_SPREAD_LEG_INTERVAL
             )
-            legs = [
-                make_leg(
-                    "SELL_TO_OPEN",
-                    1,
-                    option_symbol(center_strike, option_type),
-                ),
-                make_leg(
-                    "BUY_TO_OPEN",
-                    1,
-                    option_symbol(buy_strike, option_type),
-                ),
-            ]
+            if action == "sell":
+                legs = [
+                    make_leg(
+                        "SELL_TO_OPEN",
+                        1,
+                        option_symbol(center_strike, option_type),
+                    ),
+                    make_leg(
+                        "BUY_TO_OPEN",
+                        1,
+                        option_symbol(buy_strike, option_type),
+                    ),
+                ]
+            else:
+                legs = [
+                    make_leg(
+                        "BUY_TO_OPEN",
+                        1,
+                        option_symbol(center_strike, option_type),
+                    ),
+                    make_leg(
+                        "SELL_TO_OPEN",
+                        1,
+                        option_symbol(buy_strike, option_type),
+                    ),
+                ]
+
         elif strategy == "fly":
             option_type = "P" if underlying_price >= center_strike else "C"
             interval = DEFAULT_BUTTERFLY_LEG_INTERVAL
@@ -166,8 +182,30 @@ class OptionTradeChart:
                 make_leg("SELL_TO_OPEN", 2, option_symbol(center_strike, option_type)),
                 make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike + interval, option_type)),
             ]
+        elif strategy == "flyup":
+            option_type = "C"
+            interval = DEFAULT_BUTTERFLY_LEG_INTERVAL
+            legs = [
+                make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike - 2*interval, option_type)),
+                make_leg("SELL_TO_OPEN", 2, option_symbol(center_strike, option_type)),
+                make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike + interval, option_type)),
+            ]
+        elif strategy == "flydown":
+            option_type = "P"
+            interval = DEFAULT_BUTTERFLY_LEG_INTERVAL
+            legs = [
+                make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike - interval, option_type)),
+                make_leg("SELL_TO_OPEN", 2, option_symbol(center_strike, option_type)),
+                make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike + 2*interval, option_type)),
+            ]
         else:
             option_type = "P" if underlying_price >= center_strike else "C"
+            if option_type == "p" and strategy != "put":
+                print("Cannot buy a put option when underlying is above strike")
+                return None
+            if option_type == "c" and strategy != "call":
+                print("Cannot buy a call option when underlying is below strike")
+                return None
             legs = [
                 make_leg("BUY_TO_OPEN", 1, option_symbol(center_strike, option_type)),
             ]
@@ -382,9 +420,9 @@ def main() -> None:
             print(f"Using date {current_date.isoformat()}.")
             continue
 
-        if not re.match(r"buy\s+(?:spread|fly|single)\b", command, flags=re.IGNORECASE):
+        if not re.match(r"(?:buy|long|sell)\s+(?:spread|fly|flyup|flydown|call|put)\b", command, flags=re.IGNORECASE):
             print(
-                "Enter 'buy spread at <strike>', 'buy fly at <strike>', 'single at <strike>"
+                "Enter 'long/sell spread at <strike>', 'buy/sell fly at <strike>', 'buy/sell call at <strike>', 'buy/sell put at <strike>', "
                 "'date [YYYY-MM-DD]', or 'quit'."
             )
             continue

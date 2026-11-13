@@ -15,6 +15,8 @@ import re
 from datetime import date, datetime, timedelta
 import asyncio
 
+from yfinance import Market
+
 #pip install pyfiglet
 #import pyfiglet
 from print_chinese import print_big_chinese, print_highlight_chinese
@@ -148,6 +150,9 @@ class TradingAgent:
     order_book_filename = None
     _schwabClient = None
     _shutdown_event = asyncio.Event()
+    _number_of_trades = 0
+    _number_of_trades_cleared1 = False
+    _number_of_trades_cleared2 = False
 
     def __init__(self):
         TradingAgent._ta = TechnicalAnalyzer()
@@ -165,9 +170,18 @@ class TradingAgent:
             ## save data to csv for later analysis
             print(f"[{task_id}] Market open minute: {minutes}")
             if minutes >= 0 and minutes <= 420:
-                item =  self._ta._schwab_client.get_option_chain_data_list(SPX_SYMBOL)
-                for s in item:
-                    spx_quote_fd.write(s+"\n")
+                try:
+                    item = self._ta._schwab_client.get_option_chain_data_list(SPX_SYMBOL)
+                    for s in item:
+                        spx_quote_fd.write(s+"\n")
+
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    raise
+                #item =  self._ta._schwab_client.get_option_chain_data_list(SPX_SYMBOL)
+                #for s in item:
+                #    spx_quote_fd.write(s+"\n")
 
             try:
                 await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
@@ -348,11 +362,34 @@ class TradingAgent:
         client = cls._schwabClient
         minutes = TradingAgent._ta.market_open_minute()
 
-                    
         # Normalize command to lowercase for clean matching
         clean_command = command.strip().lower()
 
         minutes = TradingAgent._ta.market_open_minute()
+
+        if minutes < 30 and cls._number_of_trades > 1:
+            print("You should not place more than 2 trades within the first 30 minutes of the market open.")
+            return None
+        if minutes < 90 and cls._number_of_trades > 5:
+            print("You should not place more than 5 trade within the first 60 minutes of the market open.")
+            return None
+
+        if minutes > 120 and minutes < 270:
+            if not cls._number_of_trades_cleared1:
+                cls._number_of_trades = 0
+                cls._number_of_trades_cleared1 = True
+
+            if cls._number_of_trades > 1:
+                print("You should not place more than 1 trade between 8:30 to 11:00")
+                return None
+
+        if minutes > 270 and minutes < 390:
+            if not cls._number_of_trades_cleared2:
+                cls._number_of_trades = 0
+                cls._number_of_trades_cleared2 = True
+            if cls._number_of_trades > 3:
+                print("You should not place more than 3 trade between 11:00 to 13:00")
+                return None
 
         # Pattern looks for:
         # (?P<action>buy|sell)          -> Matches "buy" or "sell"
@@ -443,18 +480,35 @@ class TradingAgent:
                 return None
 
         #buy fly at 7590
-        #buy spread at 7590
+        #long spread at 7590
+        #sell spread at 7590
         #buy fly15 at 7590   (butterfly wth leg distance 15)
-        multileg_option_order_pattern = pattern = r"(?P<action>buy|sell|close)\s+(?P<strategy>fly|spread|fly15)\s+at\s+(?P<price>\d+)"
-        match = re.match(multileg_option_order_pattern, clean_command)   
-        if match:
-            #client = SchwabClient()
-            if minutes <= 5:
-                print("Do not start trade yet, wait for 15min after open.")
-                return None
-            
-            data = match.groupdict()
+        multileg_option_order_pattern = pattern = r"(?P<action>buy|long|sell)\s+(?P<strategy>fly|spread|fly15)\s+at\s+(?P<price>\d+)"
+        #long spread at 7590 limit 1.0
+        #sell spread at 7590 limit 1.0
+        #buy fly at 7590 limit 1.0
+        #buy fly15 at 7590 limit 1.0   (butterfly wth leg distance 15)
+        multileg_option_order_pattern_with_limit = pattern = r"(?P<action>buy|long|sell)\s+(?P<strategy>fly|spread|fly15)\s+at\s+(?P<price>\d+)\s+limit\s+(?P<limit_price>\d+\.?\d*)"
+
+        match = re.match(multileg_option_order_pattern, clean_command)
+        match1 = re.match(multileg_option_order_pattern_with_limit, clean_command)
+        if match or match1:
+            data = match1.groupdict() if match1 else match.groupdict()
+            limit_price = None
+            if limit_price := data.get("limit_price"):
+                print(f"Placing a {data['action']} {data['strategy']} option order at {data['price']} with limit price {limit_price}")
+                limit_price = float(limit_price)
             if data["strategy"] == "fly" or data["strategy"] == "fly15":
+                if data["action"] not in ["buy", "sell"]:
+                    print("Only buy/sell fly is supported for now.")
+                    return None
+                if minutes <= 5:
+                    print("Do not start trade yet, wait for 15min after open.")
+                    return None
+            
+                if data["action"] != "buy":
+                    print("Only buy fly is supported for now.")
+                    return None
                 if data["strategy"] == "fly15":
                     print("You are not ready to do butterly with leg interval of 15.")
                     #leg_interval = 15
@@ -468,11 +522,12 @@ class TradingAgent:
                 response, order_id = client.place_butterfly_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
                                                                 lower_strike = price-leg_interval, \
                                                                 middle_strike = price, upper_strike = price+leg_interval,
-                                                                quantity = 1, action = data['action'].upper())
+                                                                quantity = 1, action = data['action'].upper(), limit_price=limit_price)
                 
     
                 if response != None and response.status_code >= 200 and response.status_code < 300:
                     print(f"{datetime.now()}: Spread order placed successfully. Order ID: {order_id}")
+                    cls._number_of_trades += 1
                 elif response != None:
                     print(f"{datetime.now()}: Failed to place butterfly order. Status code: {response.status_code}, Response: {response.text}")
                 else:
@@ -481,15 +536,23 @@ class TradingAgent:
                 # Implement the logic to place a butterfly option order
             elif data["strategy"] == "spread":
                 print(f"Placing a {data["action"]} spread option order at {data['price']}")
+
+                if data["action"] not in ["sell", "long"]:
+                    print("Only sell and long spread are supported for now.")
+                    return None
+                if minutes <= 5:
+                    print("Do not start trade yet, wait for 15min after open.")
+                    return None
                 
                 # Implement the logic to place a spread option order
                 response, order_id = client.place_credit_spread_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
                                                                 sell_strike = float(data['price']), \
                                                                 leg_interval = DEFAULT_SPREAD_LEG_INTERVAL, quantity = DEFAULT_SPREAD_QUANTITY,
-                                                                action = data['action'].upper())
+                                                                action = data['action'].upper(), limit_price = limit_price)
     
                 if response != None and response.status_code >= 200 and response.status_code < 300:
                     print(f"{datetime.now()}: Spread order placed successfully. Order ID: {order_id}")
+                    cls._number_of_trades += 1
                 elif response != None:
                     print(f"{datetime.now()}: Failed to place spread order. Status code: {response.status_code}, Response: {response.text}")
                 else:
@@ -505,16 +568,18 @@ class TradingAgent:
                 file.close()
             return response
 
-        #buy spread call auto
-        #buy spread put auto
-        auto_spread_order_pattern = r"(?P<action>buy|sell)\s+spread\s+(?P<callput>call|put)\s+auto"
+        #long/sell spread call auto
+        #long/sell spread put auto
+        auto_spread_order_pattern = r"(?P<action>long|sell)\s+spread\s+(?P<callput>call|put)\s+auto"
         match = re.match(auto_spread_order_pattern, clean_command)
         if match:
+            data = match.groupdict()
+            if data["action"] == "buy":
+                print("Only sell spread is supported for now.")
+                return None
             if minutes <= 5:
                 print("Do not start trade yet, wait for 15min after open.")
                 return None
-                        
-            data = match.groupdict()
             spread = client.find_spx_credit_spread(contract_type=data['callput'].upper())
             #spread = client.find_spx_credit_spread(contract_type=data['callput'].upper(), date=datetime(2026, 10, 19))
             if spread is None:
@@ -528,6 +593,7 @@ class TradingAgent:
 
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 print(f"{datetime.now()}: Spread order placed successfully. Order ID: {order_id}")
+                cls._number_of_trades += 1
             elif response != None:
                 print(f"{datetime.now()}: Failed to place spread order. Status code: {response.status_code}, Response: {response.text}")
             else:
@@ -540,9 +606,9 @@ class TradingAgent:
         auto_option_order_pattern = r"(?P<action>buy)\s+(?P<callput>call|put)\s+auto"
         match = re.match(auto_option_order_pattern, clean_command)
         if match:
-            if minutes <= 15:
-                print("Do not start trade yet, wait for 15min after open.")
-                return None
+            #if minutes <= 5:
+            #    print("Do not start trade yet, wait for 15min after open.")
+            #    return None
             data = match.groupdict()
             if data["action"] == "buy" and data["callput"] == "call":
                 print(f"Placing a buy call auto order")
@@ -557,11 +623,13 @@ class TradingAgent:
                 contract_type=data['callput'].upper())
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 print(f"{datetime.now()}: {data['action']} {data['callput']} auto order placed successfully. Order ID: {order_id}")
+                cls._number_of_trades += 1
                 ## need to add order reason for it
                 trade_reason = input("Trade reason: ").strip()
                 with open(TradingAgent.order_book_filename, "a", encoding="utf-8 ") as file:
                     file.write(f"{datetime.now()}: {clean_command};{order_id};[{trade_reason}]\n")
                 file.close()
+                TradingAgent._number_of_trades += 1
             elif response != None:
                 print(f"{datetime.now()}: Failed to place {data['action']} {data['callput']} auto order. Status code: {response.status_code}, Response: {response.text}")
             else:
@@ -582,6 +650,7 @@ class TradingAgent:
 
             if response != None and response.status_code >= 200 and response.status_code < 300:
                 print(f"{datetime.now()}: Buy  {contract_type} order at {strike} with {price} placed successfully. Order ID: {order_id}")
+                cls._number_of_trades += 1
                 ## need to add order reason for it
                 trade_reason = input("Trade reason: ").strip()
                 with open(TradingAgent.order_book_filename, "a", encoding="utf-8 ") as file:
@@ -593,6 +662,44 @@ class TradingAgent:
                 print(f"{datetime.now()}: Buy  {contract_type} order at {strike} with {price} placed failed. No response received.  ")
             return response
 
+        #buy flyup at 7800
+        #buy flydown at 7800
+        fly_order_pattern = r"(?P<action>buy)\s+(?P<direction>flyup|flydown)\s+at\s+(?P<strike>\d+)"
+        match = re.match(fly_order_pattern, clean_command)
+        if match:
+            data = match.groupdict()
+            if minutes <= 15:
+                print("Do not start trade yet, wait for 15min after open.")
+                return None
+
+            data = match.groupdict()
+            middle_strike = float(data['strike'])
+            if data["direction"] == "flyup" or data["direction"] == "flydown":
+                if data["direction"] == "flyup":
+                    lower_strike = middle_strike - 20
+                    upper_strike = middle_strike + 10
+                    contract_type = "CALL"
+                else:
+                    lower_strike = middle_strike - 10
+                    upper_strike = middle_strike + 20
+                    contract_type = "PUT"
+
+                print(f"Placing a {data['action']} {data['direction']} {lower_strike}/{middle_strike}/{upper_strike} option order")
+                # Implement the logic to place a butterfly option order
+                response, order_id = client.place_butterfly_order(underlying_symbol = SPX_SYMBOL, expiration_date = None, \
+                                                                lower_strike = lower_strike, \
+                                                                middle_strike = middle_strike, upper_strike = upper_strike,
+                                                                quantity = 1,
+                                                                contract_type = contract_type,
+                                                                action = data['action'].upper(), upper_price_limit = 7.0)
+
+                if response != None and response.status_code >= 200 and response.status_code < 300:
+                    print(f"{datetime.now()}:{data['action']} {data['direction']}  placed successfully. Order ID: {order_id}")
+                    cls._number_of_trades += 1
+                elif response != None:
+                    print(f"{datetime.now()}: Failed to place butterfly order. Status code: {response.status_code}, Response: {response.text}")
+                else:
+                    print(f"{datetime.now()}: Failed to place butterfly order. No response received.")
 
         print(f"Not yet support this command: {clean_command}")
         return None 
@@ -601,12 +708,15 @@ if __name__ == "__main__":
     import sys
 
     agent = TradingAgent()
-    run_mode = 1
+    run_mode = 0
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in {"command", "c"}:
             print("Running agent with console input")
             run_mode = 1
+        if cmd in {"monitor", "m"}:
+            print("Running agent in monitor mode")
+            run_mode = 0
         else:
             print("Unknown command. Use 'command' or 'c'.")
 
